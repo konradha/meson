@@ -32,7 +32,7 @@ import mesonbuild.environment
 import mesonbuild.coredata
 import mesonbuild.modules.gnome
 from mesonbuild.mesonlib import (
-    is_cygwin, windows_proof_rmtree, python_command
+    is_cygwin, join_args, windows_proof_rmtree, python_command
 )
 import mesonbuild.modules.pkgconfig
 
@@ -56,8 +56,8 @@ class BasePlatformTests(TestCase):
         # Get the backend
         self.backend = getattr(Backend, os.environ['MESON_UNIT_TEST_BACKEND'])
         self.meson_args = ['--backend=' + self.backend.name]
-        self.meson_native_file = None
-        self.meson_cross_file = None
+        self.meson_native_files = []
+        self.meson_cross_files = []
         self.meson_command = python_command + [get_meson_script()]
         self.setup_command = self.meson_command + self.meson_args
         self.mconf_command = self.meson_command + ['configure']
@@ -69,6 +69,7 @@ class BasePlatformTests(TestCase):
             self.uninstall_command = get_backend_commands(self.backend)
         # Test directories
         self.common_test_dir = os.path.join(src_root, 'test cases/common')
+        self.rust_test_dir = os.path.join(src_root, 'test cases/rust')
         self.vala_test_dir = os.path.join(src_root, 'test cases/vala')
         self.framework_test_dir = os.path.join(src_root, 'test cases/frameworks')
         self.unit_test_dir = os.path.join(src_root, 'test cases/unit')
@@ -99,14 +100,21 @@ class BasePlatformTests(TestCase):
         self.builddirs.append(self.builddir)
 
     def new_builddir(self):
-        if not is_cygwin():
-            # Keep builddirs inside the source tree so that virus scanners
-            # don't complain
-            newdir = tempfile.mkdtemp(dir=os.getcwd())
-        else:
-            # But not on Cygwin because that breaks the umask tests. See:
-            # https://github.com/mesonbuild/meson/pull/5546#issuecomment-509666523
-            newdir = tempfile.mkdtemp()
+        # Keep builddirs inside the source tree so that virus scanners
+        # don't complain
+        newdir = tempfile.mkdtemp(dir=os.getcwd())
+        # In case the directory is inside a symlinked directory, find the real
+        # path otherwise we might not find the srcdir from inside the builddir.
+        newdir = os.path.realpath(newdir)
+        self.change_builddir(newdir)
+
+    def new_builddir_in_tempdir(self):
+        # Can't keep the builddir inside the source tree for the umask tests:
+        # https://github.com/mesonbuild/meson/pull/5546#issuecomment-509666523
+        # And we can't do this for all tests because it causes the path to be
+        # a short-path which breaks other tests:
+        # https://github.com/mesonbuild/meson/pull/9497
+        newdir = tempfile.mkdtemp()
         # In case the directory is inside a symlinked directory, find the real
         # path otherwise we might not find the srcdir from inside the builddir.
         newdir = os.path.realpath(newdir)
@@ -135,7 +143,7 @@ class BasePlatformTests(TestCase):
         os.environ.update(self.orig_env)
         super().tearDown()
 
-    def _run(self, command, *, workdir=None, override_envvars=None):
+    def _run(self, command, *, workdir=None, override_envvars: T.Optional[T.Mapping[str, str]] = None, stderr=True):
         '''
         Run a command while printing the stdout and stderr to stdout,
         and also return a copy of it
@@ -150,10 +158,16 @@ class BasePlatformTests(TestCase):
             env.update(override_envvars)
 
         p = subprocess.run(command, stdout=subprocess.PIPE,
-                           stderr=subprocess.STDOUT, env=env,
+                           stderr=subprocess.STDOUT if stderr else subprocess.PIPE,
+                           env=env,
                            encoding='utf-8',
-                           universal_newlines=True, cwd=workdir, timeout=60 * 5)
+                           text=True, cwd=workdir, timeout=60 * 5)
+        print('$', join_args(command))
+        print('stdout:')
         print(p.stdout)
+        if not stderr:
+            print('stderr:')
+            print(p.stderr)
         if p.returncode != 0:
             if 'MESON_SKIP_TEST' in p.stdout:
                 raise SkipTest('Project requested skipping.')
@@ -164,7 +178,7 @@ class BasePlatformTests(TestCase):
              extra_args=None,
              default_args=True,
              inprocess=False,
-             override_envvars=None,
+             override_envvars: T.Optional[T.Mapping[str, str]] = None,
              workdir=None,
              allow_fail: bool = False) -> str:
         """Call `meson setup`
@@ -184,10 +198,10 @@ class BasePlatformTests(TestCase):
             args += ['--prefix', self.prefix]
             if self.libdir:
                 args += ['--libdir', self.libdir]
-            if self.meson_native_file:
-                args += ['--native-file', self.meson_native_file]
-            if self.meson_cross_file:
-                args += ['--cross-file', self.meson_cross_file]
+            for f in self.meson_native_files:
+                args += ['--native-file', f]
+            for f in self.meson_cross_files:
+                args += ['--cross-file', f]
         self.privatedir = os.path.join(self.builddir, 'meson-private')
         if inprocess:
             try:
@@ -227,13 +241,13 @@ class BasePlatformTests(TestCase):
                 out = self._get_meson_log()  # best we can do here
         return out
 
-    def build(self, target=None, *, extra_args=None, override_envvars=None):
+    def build(self, target=None, *, extra_args=None, override_envvars=None, stderr=True):
         if extra_args is None:
             extra_args = []
         # Add arguments for building the target (if specified),
         # and using the build dir (if required, with VS)
         args = get_builddir_target_args(self.backend, self.builddir, target)
-        return self._run(self.build_command + args + extra_args, workdir=self.builddir, override_envvars=override_envvars)
+        return self._run(self.build_command + args + extra_args, workdir=self.builddir, override_envvars=override_envvars, stderr=stderr)
 
     def clean(self, *, override_envvars=None):
         dir_args = get_builddir_target_args(self.backend, self.builddir, None)
@@ -241,10 +255,10 @@ class BasePlatformTests(TestCase):
 
     def run_tests(self, *, inprocess=False, override_envvars=None):
         if not inprocess:
-            self._run(self.test_command, workdir=self.builddir, override_envvars=override_envvars)
+            return self._run(self.test_command, workdir=self.builddir, override_envvars=override_envvars)
         else:
             with mock.patch.dict(os.environ, override_envvars):
-                run_mtest_inprocess(['-C', self.builddir])
+                return run_mtest_inprocess(['-C', self.builddir])[1]
 
     def install(self, *, use_destdir=True, override_envvars=None):
         if self.backend is not Backend.ninja:
@@ -255,7 +269,7 @@ class BasePlatformTests(TestCase):
                 override_envvars = destdir
             else:
                 override_envvars.update(destdir)
-        self._run(self.install_command, workdir=self.builddir, override_envvars=override_envvars)
+        return self._run(self.install_command, workdir=self.builddir, override_envvars=override_envvars)
 
     def uninstall(self, *, override_envvars=None):
         self._run(self.uninstall_command, workdir=self.builddir, override_envvars=override_envvars)
@@ -371,7 +385,7 @@ class BasePlatformTests(TestCase):
 
     def assertReconfiguredBuildIsNoop(self):
         'Assert that we reconfigured and then there was nothing to do'
-        ret = self.build()
+        ret = self.build(stderr=False)
         self.assertIn('The Meson build system', ret)
         if self.backend is Backend.ninja:
             for line in ret.split('\n'):
@@ -393,7 +407,7 @@ class BasePlatformTests(TestCase):
             raise RuntimeError(f'Invalid backend: {self.backend.name!r}')
 
     def assertBuildIsNoop(self):
-        ret = self.build()
+        ret = self.build(stderr=False)
         if self.backend is Backend.ninja:
             self.assertIn(ret.split('\n')[-2], self.no_rebuild_stdout)
         elif self.backend is Backend.vs:

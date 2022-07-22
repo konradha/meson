@@ -15,7 +15,7 @@ subdir('include')
 
 # disable this test unless a bug fix for spaces in pathnames is present
 # https://bugzilla.gnome.org/show_bug.cgi?id=753145
-result = run_command(gtkdoc, ['--version'])
+result = run_command(gtkdoc, ['--version'], check: true)
 gtkdoc_ver = result.stdout().strip()
 if gtkdoc_ver == ''
   gtkdoc_ver = result.stderr().strip()
@@ -31,9 +31,15 @@ libfoo = shared_library('foo', 'foo.c',
   dependencies: gobject,
 )
 
+deps = []
+if host_machine.system() == 'darwin'
+  deps += dependency('appleframeworks', modules : ['Foundation', 'CoreFoundation'])
+endif
+
 foo_dep = declare_dependency(
   link_with: libfoo,
   include_directories: inc,
+  dependencies: deps,
 )
 
 subdir('doc')

@@ -1,4 +1,4 @@
-# Copyright 2019 The meson development team
+# Copyright 2019-2022 The meson development team
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -45,9 +45,10 @@ clang_optimization_args = {
 
 class ClangCompiler(GnuLikeCompiler):
 
+    id = 'clang'
+
     def __init__(self, defines: T.Optional[T.Dict[str, str]]):
         super().__init__()
-        self.id = 'clang'
         self.defines = defines or {}
         self.base_options.update(
             {OptionKey('b_colorout'), OptionKey('b_lto_threads'), OptionKey('b_lto_mode')})
@@ -82,7 +83,7 @@ class ClangCompiler(GnuLikeCompiler):
 
     def get_compiler_check_args(self, mode: CompileCheckMode) -> T.List[str]:
         # Clang is different than GCC, it will return True when a symbol isn't
-        # defined in a header. Specifically this seems ot have something to do
+        # defined in a header. Specifically this seems to have something to do
         # with functions that may be in a header on some systems, but not all of
         # them. `strlcat` specifically with can trigger this.
         myargs: T.List[str] = ['-Werror=implicit-function-declaration']
@@ -105,7 +106,7 @@ class ClangCompiler(GnuLikeCompiler):
         if isinstance(self.linker, AppleDynamicLinker) and mesonlib.version_compare(self.version, '>=8.0'):
             extra_args.append('-Wl,-no_weak_imports')
         return super().has_function(funcname, prefix, env, extra_args=extra_args,
-                                   dependencies=dependencies)
+                                    dependencies=dependencies)
 
     def openmp_flags(self) -> T.List[str]:
         if mesonlib.version_compare(self.version, '>=3.8.0'):
@@ -117,22 +118,24 @@ class ClangCompiler(GnuLikeCompiler):
             return []
 
     @classmethod
-    def use_linker_args(cls, linker: str) -> T.List[str]:
+    def use_linker_args(cls, linker: str, version: str) -> T.List[str]:
         # Clang additionally can use a linker specified as a path, which GCC
-        # (and other gcc-like compilers) cannot. This is becuse clang (being
+        # (and other gcc-like compilers) cannot. This is because clang (being
         # llvm based) is retargetable, while GCC is not.
         #
 
         # qcld: Qualcomm Snapdragon linker, based on LLVM
         if linker == 'qcld':
-            return  ['-fuse-ld=qcld']
+            return ['-fuse-ld=qcld']
+        if linker == 'mold':
+            return ['-fuse-ld=mold']
 
         if shutil.which(linker):
             if not shutil.which(linker):
                 raise mesonlib.MesonException(
                     f'Cannot find linker {linker}.')
             return [f'-fuse-ld={linker}']
-        return super().use_linker_args(linker)
+        return super().use_linker_args(linker, version)
 
     def get_has_func_attribute_extra_args(self, name: str) -> T.List[str]:
         # Clang only warns about unknown or ignored attributes, so force an
@@ -156,7 +159,9 @@ class ClangCompiler(GnuLikeCompiler):
 
     def get_lto_link_args(self, *, threads: int = 0, mode: str = 'default') -> T.List[str]:
         args = self.get_lto_compile_args(threads=threads, mode=mode)
-        # In clang -flto=0 means auto
-        if threads >= 0:
+        # In clang -flto-jobs=0 means auto, and is the default if unspecified, just like in meson
+        if threads > 0:
+            if not mesonlib.version_compare(self.version, '>=4.0.0'):
+                raise mesonlib.MesonException('clang support for LTO threads requires clang >=4.0')
             args.append(f'-flto-jobs={threads}')
         return args

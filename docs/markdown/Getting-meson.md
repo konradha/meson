@@ -1,6 +1,6 @@
 # Getting Meson
 
-Meson is implemented in Python 3, and requires 3.6 or newer. If your
+Meson is implemented in Python 3, and requires 3.7 or newer. If your
 operating system provides a package manager, you should install it
 with that. For platforms that don't have a package manager, you need
 to download it from [Python's home page]. See below for
@@ -14,12 +14,23 @@ itself without doing anything special.
 
 On Windows, if you did not install Python with the installer options
 that make Python scripts executable, you will have to run `python
-/path/to/meson.py`, where `python` is Python 3.6 or newer.
+/path/to/meson.py`, where `python` is Python 3.7 or newer.
 
 The newest development code can be obtained directly from [Git], and
 we strive to ensure that it will always be working and usable. All
 commits go through a pull-request process that runs CI and tests
 several platforms.
+
+### Packing Meson into a zipapp
+
+After downloading the release, you can create a standalone single-file
+executable for Meson by running the script:
+
+```
+./packaging/create_zipapp.py --outfile meson.pyz --interpreter '/usr/bin/env python3' <source checkout>
+```
+
+This uses python's native support for [zipapp].
 
 ## Installing Meson with pip
 
@@ -92,6 +103,7 @@ provide Python 3. Use either `mingw32/mingw-w64-i686-python3` or
 are building for.
 
   [GitHub release page]: https://github.com/mesonbuild/meson/releases
+  [zipapp]: https://docs.python.org/3/library/zipapp.html
   [Python Package Index]: https://pypi.python.org/pypi/meson/
   [Git]: https://github.com/mesonbuild/meson
   [Python's home page]: https://www.python.org/downloads/

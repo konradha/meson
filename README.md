@@ -14,7 +14,7 @@ build system.
 
 #### Dependencies
 
- - [Python](https://python.org) (version 3.6 or newer)
+ - [Python](https://python.org) (version 3.7 or newer)
  - [Ninja](https://ninja-build.org) (version 1.8.2 or newer)
 
 #### Installing from source
@@ -40,6 +40,14 @@ python3 -m pip install ninja
 
 More on Installing Meson build can be found at the
 [getting meson page](https://mesonbuild.com/Getting-meson.html).
+
+#### Creating a standalone script
+
+Meson can be run as a [Python zip
+app](https://docs.python.org/3/library/zipapp.html). To generate the
+executable run the following command:
+
+    ./packaging/create_zipapp.py --outfile meson.pyz --interpreter '/usr/bin/env python3' <source checkout>
 
 #### Running
 

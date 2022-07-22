@@ -11,11 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 from pathlib import Path
 from .traceparser import CMakeTraceParser
 from ..envconfig import CMakeSkipCompilerTest
-from ..mesonlib import MachineChoice
+from ..compilers import VisualStudioLikeCompiler
 from .common import language_map, cmake_get_generator_args
 from .. import mlog
 
@@ -27,6 +28,8 @@ from textwrap import dedent
 if T.TYPE_CHECKING:
     from .executor import CMakeExecutor
     from ..environment import Environment
+    from ..compilers import Compiler
+    from ..mesonlib import MachineChoice
 
 class CMakeExecScope(Enum):
     SUBPROJECT = 'subproject'
@@ -182,20 +185,29 @@ class CMakeToolchain:
 
         # Set the compiler variables
         for lang, comp_obj in self.compilers.items():
-            exe_list = [make_abs(x) for x in comp_obj.get_exelist()]
             prefix = 'CMAKE_{}_'.format(language_map.get(lang, lang.upper()))
 
+            exe_list = comp_obj.get_exelist()
             if not exe_list:
                 continue
-            elif len(exe_list) == 2:
-                defaults[prefix + 'COMPILER']          = [exe_list[1]]
-                defaults[prefix + 'COMPILER_LAUNCHER'] = [exe_list[0]]
-            else:
-                defaults[prefix + 'COMPILER'] = exe_list
+
+            if len(exe_list) >= 2 and not self.is_cmdline_option(comp_obj, exe_list[1]):
+                defaults[prefix + 'COMPILER_LAUNCHER'] = [make_abs(exe_list[0])]
+                exe_list = exe_list[1:]
+
+            exe_list[0] = make_abs(exe_list[0])
+            defaults[prefix + 'COMPILER'] = exe_list
             if comp_obj.get_id() == 'clang-cl':
                 defaults['CMAKE_LINKER'] = comp_obj.get_linker_exelist()
 
         return defaults
+
+    @staticmethod
+    def is_cmdline_option(compiler: 'Compiler', arg: str) -> bool:
+        if isinstance(compiler, VisualStudioLikeCompiler):
+            return arg.startswith('/')
+        else:
+            return arg.startswith('-')
 
     def update_cmake_compiler_state(self) -> None:
         # Check if all variables are already cached
@@ -221,7 +233,7 @@ class CMakeToolchain:
         temp_toolchain_file.write_text(CMakeToolchain._print_vars(self.variables), encoding='utf-8')
 
         # Configure
-        trace = CMakeTraceParser(self.cmakebin.version(), build_dir)
+        trace = CMakeTraceParser(self.cmakebin.version(), build_dir, self.env)
         self.cmakebin.set_exec_mode(print_cmout=False, always_capture_stderr=trace.requires_stderr())
         cmake_args = []
         cmake_args += trace.trace_args()

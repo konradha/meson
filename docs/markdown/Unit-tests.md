@@ -36,7 +36,7 @@ By default, environment variable
 [`MALLOC_PERTURB_`](http://man7.org/linux/man-pages/man3/mallopt.3.html) is
 set to a random value between 1..255. This can help find memory leaks on
 configurations using glibc, including with non-GCC compilers. This feature
-can be disabled as discussed in [test()](Reference-manual.md#test).
+can be disabled as discussed in [[test]].
 
 ## Coverage
 
@@ -233,6 +233,20 @@ Meson will report the output produced by the failing tests along with
 other useful information as the environmental variables. This is
 useful, for example, when you run the tests on Travis-CI, Jenkins and
 the like.
+
+**Timeout**
+
+In the test case options, the `timeout` option is specified in a number of seconds.
+
+To disable timeout in test cases, add `timeout: 0` or a negative value to allow
+infinite duration for the test case to complete.
+
+For running tests, you can specify a command line argument for overriding the
+timeout as well:
+
+```console
+$ meson test --timeout-multiplier 0
+```
 
 For further information see the command line help of Meson by running
 `meson test -h`.

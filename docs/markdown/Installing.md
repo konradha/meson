@@ -96,7 +96,7 @@ also sets the variables `MESON_SOURCE_ROOT` and `MESON_BUILD_ROOT`.
 Telling Meson to run this script at install time is a one-liner.
 
 ```meson
-meson.add_install_script('myscript.sh')
+[[#meson.add_install_script]]('myscript.sh')
 ```
 
 The argument is the name of the script file relative to the current
@@ -114,7 +114,7 @@ $ DESTDIR=/path/to/staging/area meson install
 ```
 
 Since *0.57.0* `--destdir` argument can be used instead of environment. In that
-case Meson will set `DESTDIR` into environment when runing install scripts.
+case Meson will set `DESTDIR` into environment when running install scripts.
 
 Since *0.60.0* `DESTDIR` and `--destdir` can be a path relative to build
 directory. An absolute path will be set into environment when executing scripts.
@@ -149,25 +149,26 @@ it can be maintained in a single place, directly in upstream `meson.build` files
 Meson sets predefined tags on some files. More tags are likely to be added over
 time, please help extending the list of well known categories.
 - `devel`:
-  * `static_library()`,
-  * `install_headers()`,
+  * [[static_library]],
+  * [[install_headers]],
   * `pkgconfig.generate()`,
   * `gnome.generate_gir()` - `.gir` file,
   * Files installed into `libdir` and with `.a` or `.pc` extension,
   * File installed into `includedir`.
 - `runtime`:
-  * `executable()`,
-  * `shared_library()`,
-  * `shared_module()`,
-  * `jar()`,
+  * [[executable]],
+  * [[shared_library]],
+  * [[shared_module]],
+  * [[jar]],
   * Files installed into `bindir`.
   * Files installed into `libdir` and with `.so` or `.dll` extension.
 - `python-runtime`:
   * `python.install_sources()`.
 - `man`:
-  * `install_man()`.
+  * [[install_man]].
 - `doc`:
   * `gnome.gtkdoc()`,
+  * `gnome.yelp()`,
   * `hotdoc.generate_doc()`.
 - `i18n`:
   * `i18n.gettext()`,
@@ -177,8 +178,8 @@ time, please help extending the list of well known categories.
   * `gnome.generate_gir()` - `.typelib` file.
 
 Custom installation tag can be set using the `install_tag` keyword argument
-on various functions such as `custom_target()`, `configure_file()`,
-`install_subdir()` and `install_data()`. See their respective documentation
+on various functions such as [[custom_target]], [[configure_file]],
+[[install_subdir]] and [[install_data]]. See their respective documentation
 in the reference manual for details. It is recommended to use one of the
 predefined tags above when possible.
 

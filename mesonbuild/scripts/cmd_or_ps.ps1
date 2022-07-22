@@ -1,11 +1,11 @@
-# Copyied from GStreamer project
+# Copied from GStreamer project
 # Author: Seungha Yang <seungha.yang@navercorp.com>
 
 $i=1
 $ppid=(gwmi win32_process -Filter "processid='$pid'").parentprocessid
 $pname=(Get-Process -id $ppid).Name
 While($true) {
-  if($pname -eq "cmd" -Or $pname -eq "powershell") {
+  if($pname -eq "cmd" -Or $pname -eq "powershell" -Or $pname -eq "pwsh") {
     Write-Host ("{0}.exe" -f $pname)
     Break
   }

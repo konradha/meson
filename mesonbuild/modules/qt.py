@@ -12,8 +12,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
-from mesonbuild import coredata
 import os
 import shutil
 import typing as T
@@ -21,20 +21,22 @@ import xml.etree.ElementTree as ET
 
 from . import ModuleReturnValue, ExtensionModule
 from .. import build
+from .. import coredata
 from .. import mlog
 from ..dependencies import find_external_dependency, Dependency, ExternalLibrary
-from ..mesonlib import MesonException, File, FileOrString, version_compare, Popen_safe
-from . import ModuleReturnValue, ExtensionModule
+from ..mesonlib import MesonException, File, version_compare, Popen_safe
 from ..interpreter import extract_required_kwarg
-from ..interpreter.type_checking import NoneType
+from ..interpreter.type_checking import INSTALL_DIR_KW, INSTALL_KW, NoneType
 from ..interpreterbase import ContainerTypeInfo, FeatureDeprecated, KwargInfo, noPosargs, FeatureNew, typed_kwargs
-from ..programs import ExternalProgram, NonExistingExternalProgram
+from ..programs import NonExistingExternalProgram
 
 if T.TYPE_CHECKING:
     from . import ModuleState
     from ..dependencies.qt import QtPkgConfigDependency, QmakeQtDependency
     from ..interpreter import Interpreter
     from ..interpreter import kwargs
+    from ..mesonlib import FileOrString
+    from ..programs import ExternalProgram
 
     QtDependencyType = T.Union[QtPkgConfigDependency, QmakeQtDependency]
 
@@ -99,10 +101,13 @@ if T.TYPE_CHECKING:
 class QtBaseModule(ExtensionModule):
     _tools_detected = False
     _rcc_supports_depfiles = False
+    _moc_supports_depfiles = False
 
     def __init__(self, interpreter: 'Interpreter', qt_version: int = 5):
         ExtensionModule.__init__(self, interpreter)
         self.qt_version = qt_version
+        # It is important that this list does not change order as the order of
+        # the returned ExternalPrograms will change as well
         self.tools: T.Dict[str, ExternalProgram] = {
             'moc': NonExistingExternalProgram('moc'),
             'uic': NonExistingExternalProgram('uic'),
@@ -120,16 +125,18 @@ class QtBaseModule(ExtensionModule):
 
     def compilers_detect(self, state: 'ModuleState', qt_dep: 'QtDependencyType') -> None:
         """Detect Qt (4 or 5) moc, uic, rcc in the specified bindir or in PATH"""
-        # It is important that this list does not change order as the order of
-        # the returned ExternalPrograms will change as well
         wanted = f'== {qt_dep.version}'
 
         def gen_bins() -> T.Generator[T.Tuple[str, str], None, None]:
             for b in self.tools:
                 if qt_dep.bindir:
                     yield os.path.join(qt_dep.bindir, b), b
-                # prefer the <tool>-qt<version> of the tool to the plain one, as we
+                if qt_dep.libexecdir:
+                    yield os.path.join(qt_dep.libexecdir, b), b
+                # prefer the (official) <tool><version> or (unofficial) <tool>-qt<version>
+                # of the tool to the plain one, as we
                 # don't know what the unsuffixed one points to without calling it.
+                yield f'{b}{qt_dep.qtver}', b
                 yield f'{b}-qt{qt_dep.qtver}', b
                 yield b, b
 
@@ -170,11 +177,15 @@ class QtBaseModule(ExtensionModule):
         if qt.found():
             # Get all tools and then make sure that they are the right version
             self.compilers_detect(state, qt)
+            if version_compare(qt.version, '>=5.15.0'):
+                self._moc_supports_depfiles = True
+            else:
+                mlog.warning('moc dependencies will not work properly until you move to Qt >= 5.15', fatal=False)
             if version_compare(qt.version, '>=5.14.0'):
                 self._rcc_supports_depfiles = True
             else:
                 mlog.warning('rcc dependencies will not work properly until you move to Qt >= 5.14:',
-                    mlog.bold('https://bugreports.qt.io/browse/QTBUG-45460'), fatal=False)
+                             mlog.bold('https://bugreports.qt.io/browse/QTBUG-45460'), fatal=False)
         else:
             suffix = f'-qt{self.qt_version}'
             self.tools['moc'] = NonExistingExternalProgram(name='moc' + suffix)
@@ -192,7 +203,7 @@ class QtBaseModule(ExtensionModule):
             abspath = rcc_file.absolute_path(state.environment.source_dir, state.environment.build_dir)
             rcc_dirname = os.path.dirname(abspath)
 
-        # FIXME: what error are we actually tring to check here?
+        # FIXME: what error are we actually trying to check here?
         try:
             tree = ET.parse(abspath)
             root = tree.getroot()
@@ -273,7 +284,7 @@ class QtBaseModule(ExtensionModule):
     @noPosargs
     @typed_kwargs(
         'qt.compile_resources',
-        KwargInfo('name', str),
+        KwargInfo('name', (str, NoneType)),
         KwargInfo(
             'sources',
             ContainerTypeInfo(list, (File, str, build.CustomTarget, build.CustomTargetIndex, build.GeneratedList), allow_empty=False),
@@ -289,7 +300,8 @@ class QtBaseModule(ExtensionModule):
         Uses CustomTargets to generate .cpp files from .qrc files.
         """
         if any(isinstance(s, (build.CustomTarget, build.CustomTargetIndex, build.GeneratedList)) for s in kwargs['sources']):
-            FeatureNew.single_use('qt.compile_resources: custom_target or generator for "sources" keyword argument', '0.60.0', state.subproject)
+            FeatureNew.single_use('qt.compile_resources: custom_target or generator for "sources" keyword argument',
+                                  '0.60.0', state.subproject, location=state.current_node)
         out = self._compile_resources_impl(state, kwargs)
         return ModuleReturnValue(out, [out])
 
@@ -323,14 +335,17 @@ class QtBaseModule(ExtensionModule):
             for s in sources:
                 qrc_deps.extend(self._parse_qrc_deps(state, s))
 
-            rcc_kwargs: T.Dict[str, T.Any] = {  # TODO: if CustomTarget had typing information we could use that here...
-                'input': sources,
-                'output': name + '.cpp',
-                'command': self.tools['rcc'].get_command() + ['-name', name, '-o', '@OUTPUT@'] + extra_args + ['@INPUT@'] + DEPFILE_ARGS,
-                'depend_files': qrc_deps,
-                'depfile': f'{name}.d',
-            }
-            res_target = build.CustomTarget(name, state.subdir, state.subproject, rcc_kwargs)
+            res_target = build.CustomTarget(
+                name,
+                state.subdir,
+                state.subproject,
+                state.environment,
+                self.tools['rcc'].get_command() + ['-name', name, '-o', '@OUTPUT@'] + extra_args + ['@INPUT@'] + DEPFILE_ARGS,
+                sources,
+                [f'{name}.cpp'],
+                depend_files=qrc_deps,
+                depfile=f'{name}.d',
+            )
             targets.append(res_target)
         else:
             for rcc_file in sources:
@@ -340,14 +355,17 @@ class QtBaseModule(ExtensionModule):
                 else:
                     basename = os.path.basename(rcc_file.fname)
                 name = f'qt{self.qt_version}-{basename.replace(".", "_")}'
-                rcc_kwargs = {
-                    'input': rcc_file,
-                    'output': f'{name}.cpp',
-                    'command': self.tools['rcc'].get_command() + ['-name', '@BASENAME@', '-o', '@OUTPUT@'] + extra_args + ['@INPUT@'] + DEPFILE_ARGS,
-                    'depend_files': qrc_deps,
-                    'depfile': f'{name}.d',
-                }
-                res_target = build.CustomTarget(name, state.subdir, state.subproject, rcc_kwargs)
+                res_target = build.CustomTarget(
+                    name,
+                    state.subdir,
+                    state.subproject,
+                    state.environment,
+                    self.tools['rcc'].get_command() + ['-name', '@BASENAME@', '-o', '@OUTPUT@'] + extra_args + ['@INPUT@'] + DEPFILE_ARGS,
+                    [rcc_file],
+                    [f'{name}.cpp'],
+                    depend_files=qrc_deps,
+                    depfile=f'{name}.d',
+                )
                 targets.append(res_target)
 
         return targets
@@ -368,7 +386,8 @@ class QtBaseModule(ExtensionModule):
     def compile_ui(self, state: 'ModuleState', args: T.Tuple, kwargs: 'UICompilerKwArgs') -> ModuleReturnValue:
         """Compile UI resources into cpp headers."""
         if any(isinstance(s, (build.CustomTarget, build.CustomTargetIndex, build.GeneratedList)) for s in kwargs['sources']):
-            FeatureNew.single_use('qt.compile_ui: custom_target or generator for "sources" keyword argument', '0.60.0', state.subproject)
+            FeatureNew.single_use('qt.compile_ui: custom_target or generator for "sources" keyword argument',
+                                  '0.60.0', state.subproject, location=state.current_node)
         out = self._compile_ui_impl(state, kwargs)
         return ModuleReturnValue(out, [out])
 
@@ -411,9 +430,11 @@ class QtBaseModule(ExtensionModule):
     )
     def compile_moc(self, state: 'ModuleState', args: T.Tuple, kwargs: 'MocCompilerKwArgs') -> ModuleReturnValue:
         if any(isinstance(s, (build.CustomTarget, build.CustomTargetIndex, build.GeneratedList)) for s in kwargs['headers']):
-            FeatureNew.single_use('qt.compile_moc: custom_target or generator for "headers" keyword argument', '0.60.0', state.subproject)
+            FeatureNew.single_use('qt.compile_moc: custom_target or generator for "headers" keyword argument',
+                                  '0.60.0', state.subproject, location=state.current_node)
         if any(isinstance(s, (build.CustomTarget, build.CustomTargetIndex, build.GeneratedList)) for s in kwargs['sources']):
-            FeatureNew.single_use('qt.compile_moc: custom_target or generator for "sources" keyword argument', '0.60.0', state.subproject)
+            FeatureNew.single_use('qt.compile_moc: custom_target or generator for "sources" keyword argument',
+                                  '0.60.0', state.subproject, location=state.current_node)
         out = self._compile_moc_impl(state, kwargs)
         return ModuleReturnValue(out, [out])
 
@@ -426,7 +447,7 @@ class QtBaseModule(ExtensionModule):
             raise MesonException(err_msg.format('MOC', f'uic-qt{self.qt_version}', self.qt_version))
 
         if not (kwargs['headers'] or kwargs['sources']):
-            raise build.InvalidArguments('At least one of the "headers" or "sources" keyword arguments must be provied and not empty')
+            raise build.InvalidArguments('At least one of the "headers" or "sources" keyword arguments must be provided and not empty')
 
         inc = state.get_include_args(include_dirs=kwargs['include_directories'])
         compile_args: T.List[str] = []
@@ -435,21 +456,26 @@ class QtBaseModule(ExtensionModule):
 
         output: T.List[build.GeneratedList] = []
 
-        arguments = kwargs['extra_args'] + inc + compile_args + ['@INPUT@', '-o', '@OUTPUT@']
+        # depfile arguments (defaults to <output-name>.d)
+        DEPFILE_ARGS: T.List[str] = ['--output-dep-file'] if self._moc_supports_depfiles else []
+
+        arguments = kwargs['extra_args'] + DEPFILE_ARGS + inc + compile_args + ['@INPUT@', '-o', '@OUTPUT@']
         if kwargs['headers']:
             moc_gen = build.Generator(
                 self.tools['moc'], arguments, ['moc_@BASENAME@.cpp'],
+                depfile='moc_@BASENAME@.cpp.d',
                 name=f'Qt{self.qt_version} moc header')
             output.append(moc_gen.process_files(kwargs['headers'], state))
         if kwargs['sources']:
             moc_gen = build.Generator(
                 self.tools['moc'], arguments, ['@BASENAME@.moc'],
+                depfile='@BASENAME.moc.d@',
                 name=f'Qt{self.qt_version} moc source')
             output.append(moc_gen.process_files(kwargs['sources'], state))
 
         return output
 
-    # We can't use typed_pos_args here, the signature is ambiguious
+    # We can't use typed_pos_args here, the signature is ambiguous
     @typed_kwargs(
         'qt.preprocess',
         KwargInfo('sources', ContainerTypeInfo(list, (File, str)), listify=True, default=[], deprecated='0.59.0'),
@@ -467,9 +493,9 @@ class QtBaseModule(ExtensionModule):
     def preprocess(self, state: 'ModuleState', args: T.List[T.Union[str, File]], kwargs: 'PreprocessKwArgs') -> ModuleReturnValue:
         _sources = args[1:]
         if _sources:
-            FeatureDeprecated.single_use('qt.preprocess positional sources', '0.59', state.subproject)
+            FeatureDeprecated.single_use('qt.preprocess positional sources', '0.59', state.subproject, location=state.current_node)
         # List is invariant, os we have to cast...
-        sources = T.cast(T.List[T.Union[str, File, build.GeneratedList, build.CustomTarget]],
+        sources = T.cast('T.List[T.Union[str, File, build.GeneratedList, build.CustomTarget]]',
                          _sources + kwargs['sources'])
         for s in sources:
             if not isinstance(s, (str, File)):
@@ -508,8 +534,8 @@ class QtBaseModule(ExtensionModule):
     @typed_kwargs(
         'qt.compile_translations',
         KwargInfo('build_by_default', bool, default=False),
-        KwargInfo('install', bool, default=False),
-        KwargInfo('install_dir', (str, NoneType)),
+        INSTALL_KW,
+        INSTALL_DIR_KW,
         KwargInfo('method', str, default='auto'),
         KwargInfo('qresource', (str, NoneType), since='0.56.0'),
         KwargInfo('rcc_extra_arguments', ContainerTypeInfo(list, str), listify=True, default=[], since='0.56.0'),
@@ -518,8 +544,10 @@ class QtBaseModule(ExtensionModule):
     def compile_translations(self, state: 'ModuleState', args: T.Tuple, kwargs: 'CompileTranslationsKwArgs') -> ModuleReturnValue:
         ts_files = kwargs['ts_files']
         if any(isinstance(s, (build.CustomTarget, build.CustomTargetIndex, build.GeneratedList)) for s in ts_files):
-            FeatureNew.single_use('qt.compile_translations: custom_target or generator for "ts_files" keyword argument', '0.60.0', state.subproject)
-        install_dir = kwargs['install_dir']
+            FeatureNew.single_use('qt.compile_translations: custom_target or generator for "ts_files" keyword argument',
+                                  '0.60.0', state.subproject, location=state.current_node)
+        if kwargs['install'] and not kwargs['install_dir']:
+            raise MesonException('qt.compile_translations: "install_dir" keyword argument must be set when "install" is true.')
         qresource = kwargs['qresource']
         if qresource:
             if ts_files:
@@ -556,16 +584,20 @@ class QtBaseModule(ExtensionModule):
                 ts = os.path.basename(ts)
             else:
                 outdir = state.subdir
-            cmd = [self.tools['lrelease'], '@INPUT@', '-qm', '@OUTPUT@']
-            lrelease_kwargs = {'output': '@BASENAME@.qm',
-                               'input': ts,
-                               'install': kwargs['install'],
-                               'install_tag': 'i18n',
-                               'build_by_default': kwargs['build_by_default'],
-                               'command': cmd}
-            if install_dir is not None:
-                lrelease_kwargs['install_dir'] = install_dir
-            lrelease_target = build.CustomTarget(f'qt{self.qt_version}-compile-{ts}', outdir, state.subproject, lrelease_kwargs)
+            cmd: T.List[T.Union[ExternalProgram, str]] = [self.tools['lrelease'], '@INPUT@', '-qm', '@OUTPUT@']
+            lrelease_target = build.CustomTarget(
+                f'qt{self.qt_version}-compile-{ts}',
+                outdir,
+                state.subproject,
+                state.environment,
+                cmd,
+                [ts],
+                ['@BASENAME@.qm'],
+                install=kwargs['install'],
+                install_dir=[kwargs['install_dir']],
+                install_tag=['i18n'],
+                build_by_default=kwargs['build_by_default'],
+            )
             translations.append(lrelease_target)
         if qresource:
             return ModuleReturnValue(results.return_value[0], [results.new_objects, translations])

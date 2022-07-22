@@ -1,4 +1,4 @@
-# Copyright 2012-2021 The Meson development team
+# Copyright 2012-2022 The Meson development team
 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,16 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 from ..mesonlib import (
-    EnvironmentException, MachineChoice, OptionKey,
+    EnvironmentException, OptionKey,
     Popen_safe, search_version
 )
 from .linkers import (
-    DynamicLinker,
     AppleDynamicLinker,
-    GnuDynamicLinker,
     GnuGoldDynamicLinker,
     GnuBFDDynamicLinker,
+    MoldDynamicLinker,
     LLVMDynamicLinker,
     QualcommLLVMDynamicLinker,
     MSVCDynamicLinker,
@@ -36,8 +37,10 @@ import shlex
 import typing as T
 
 if T.TYPE_CHECKING:
+    from .linkers import DynamicLinker, GnuDynamicLinker
     from ..environment import Environment
     from ..compilers import Compiler
+    from ..mesonlib import MachineChoice
 
 defaults: T.Dict[str, T.List[str]] = {}
 defaults['static_linker'] = ['ar', 'gar']
@@ -54,9 +57,9 @@ def __failed_to_detect_linker(compiler: T.List[str], args: T.List[str], stdout: 
 
 
 def guess_win_linker(env: 'Environment', compiler: T.List[str], comp_class: T.Type['Compiler'],
-                        for_machine: MachineChoice, *,
-                        use_linker_prefix: bool = True, invoked_directly: bool = True,
-                        extra_args: T.Optional[T.List[str]] = None) -> 'DynamicLinker':
+                     comp_version: str, for_machine: MachineChoice, *,
+                     use_linker_prefix: bool = True, invoked_directly: bool = True,
+                     extra_args: T.Optional[T.List[str]] = None) -> 'DynamicLinker':
     env.coredata.add_lang_args(comp_class.language, comp_class, for_machine, env)
 
     # Explicitly pass logo here so that we can get the version of link.exe
@@ -72,14 +75,14 @@ def guess_win_linker(env: 'Environment', compiler: T.List[str], comp_class: T.Ty
     override = []  # type: T.List[str]
     value = env.lookup_binary_entry(for_machine, comp_class.language + '_ld')
     if value is not None:
-        override = comp_class.use_linker_args(value[0])
+        override = comp_class.use_linker_args(value[0], comp_version)
         check_args += override
 
     if extra_args is not None:
         check_args.extend(extra_args)
 
     p, o, _ = Popen_safe(compiler + check_args)
-    if o.startswith('LLD'):
+    if 'LLD' in o.split('\n')[0]:
         if '(compatible with GNU linkers)' in o:
             return LLVMDynamicLinker(
                 compiler, for_machine, comp_class.LINKER_PREFIX,
@@ -94,7 +97,7 @@ def guess_win_linker(env: 'Environment', compiler: T.List[str], comp_class: T.Ty
         # We've already hanedled the non-direct case above
 
     p, o, e = Popen_safe(compiler + check_args)
-    if o.startswith('LLD'):
+    if 'LLD' in o.split('\n')[0]:
         return ClangClDynamicLinker(
             for_machine, [],
             prefix=comp_class.LINKER_PREFIX if use_linker_prefix else [],
@@ -115,19 +118,22 @@ def guess_win_linker(env: 'Environment', compiler: T.List[str], comp_class: T.Ty
             prefix=comp_class.LINKER_PREFIX if use_linker_prefix else [],
             version=search_version(out), direct=invoked_directly)
     elif 'GNU coreutils' in o:
+        import shutil
+        fullpath = shutil.which(compiler[0])
         raise EnvironmentException(
-            "Found GNU link.exe instead of MSVC link.exe. This link.exe "
-            "is not a linker. You may need to reorder entries to your "
-            "%PATH% variable to resolve this.")
+            f"Found GNU link.exe instead of MSVC link.exe in {fullpath}.\n"
+            "This link.exe is not a linker.\n"
+            "You may need to reorder entries to your %PATH% variable to resolve this.")
     __failed_to_detect_linker(compiler, check_args, o, e)
 
 def guess_nix_linker(env: 'Environment', compiler: T.List[str], comp_class: T.Type['Compiler'],
-                        for_machine: MachineChoice, *,
-                        extra_args: T.Optional[T.List[str]] = None) -> 'DynamicLinker':
+                     comp_version: str, for_machine: MachineChoice, *,
+                     extra_args: T.Optional[T.List[str]] = None) -> 'DynamicLinker':
     """Helper for guessing what linker to use on Unix-Like OSes.
 
     :compiler: Invocation to use to get linker
     :comp_class: The Compiler Type (uninstantiated)
+    :comp_version: The compiler version string
     :for_machine: which machine this linker targets
     :extra_args: Any additional arguments required (such as a source file)
     """
@@ -143,13 +149,13 @@ def guess_nix_linker(env: 'Environment', compiler: T.List[str], comp_class: T.Ty
     override = []  # type: T.List[str]
     value = env.lookup_binary_entry(for_machine, comp_class.language + '_ld')
     if value is not None:
-        override = comp_class.use_linker_args(value[0])
+        override = comp_class.use_linker_args(value[0], comp_version)
         check_args += override
 
     _, o, e = Popen_safe(compiler + check_args)
     v = search_version(o + e)
     linker: DynamicLinker
-    if o.startswith('LLD'):
+    if 'LLD' in o.split('\n')[0]:
         linker = LLVMDynamicLinker(
             compiler, for_machine, comp_class.LINKER_PREFIX, override, version=v)
     elif 'Snapdragon' in e and 'LLVM' in e:
@@ -189,8 +195,12 @@ def guess_nix_linker(env: 'Environment', compiler: T.List[str], comp_class: T.Ty
     # TODO: Use the right linker for lfortran
     elif 'GNU' in o or 'GNU' in e:
         cls: T.Type[GnuDynamicLinker]
-        if 'gold' in o or 'gold' in e:
+        # this is always the only thing on stdout, except for swift
+        # which may or may not redirect the linker stdout to stderr
+        if o.startswith('GNU gold') or e.startswith('GNU gold'):
             cls = GnuGoldDynamicLinker
+        elif o.startswith('mold') or e.startswith('mold'):
+            cls = MoldDynamicLinker
         else:
             cls = GnuBFDDynamicLinker
         linker = cls(compiler, for_machine, comp_class.LINKER_PREFIX, override, version=v)

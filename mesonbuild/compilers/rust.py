@@ -1,4 +1,4 @@
-# Copyright 2012-2017 The Meson development team
+# Copyright 2012-2022 The Meson development team
 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,23 +11,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import subprocess, os.path
 import textwrap
 import typing as T
 
 from .. import coredata
-from ..mesonlib import (
-    EnvironmentException, MachineChoice, MesonException, Popen_safe,
-    OptionKey,
-)
+from ..mesonlib import EnvironmentException, MesonException, Popen_safe, OptionKey
 from .compilers import Compiler, rust_buildtype_args, clike_debug_args
 
 if T.TYPE_CHECKING:
-    from ..coredata import KeyedOptionDictType
+    from ..coredata import MutableKeyedOptionDictType, KeyedOptionDictType
     from ..envconfig import MachineInfo
     from ..environment import Environment  # noqa: F401
     from ..linkers import DynamicLinker
+    from ..mesonlib import MachineChoice
     from ..programs import ExternalProgram
 
 
@@ -44,6 +43,14 @@ class RustCompiler(Compiler):
 
     # rustc doesn't invoke the compiler itself, it doesn't need a LINKER_PREFIX
     language = 'rust'
+    id = 'rustc'
+
+    _WARNING_LEVELS: T.Dict[str, T.List[str]] = {
+        '0': ['-A', 'warnings'],
+        '1': [],
+        '2': [],
+        '3': ['-W', 'warnings'],
+    }
 
     def __init__(self, exelist: T.List[str], version: str, for_machine: MachineChoice,
                  is_cross: bool, info: 'MachineInfo',
@@ -54,7 +61,6 @@ class RustCompiler(Compiler):
                          is_cross=is_cross, full_version=full_version,
                          linker=linker)
         self.exe_wrapper = exe_wrapper
-        self.id = 'rustc'
         self.base_options.add(OptionKey('b_colorout'))
         if 'link' in self.linker.id:
             self.base_options.add(OptionKey('b_vscrt'))
@@ -129,19 +135,19 @@ class RustCompiler(Compiler):
         return ['-o', outputname]
 
     @classmethod
-    def use_linker_args(cls, linker: str) -> T.List[str]:
+    def use_linker_args(cls, linker: str, version: str) -> T.List[str]:
         return ['-C', f'linker={linker}']
 
     # Rust does not have a use_linker_args because it dispatches to a gcc-like
     # C compiler for dynamic linking, as such we invoke the C compiler's
     # use_linker_args method instead.
 
-    def get_options(self) -> 'KeyedOptionDictType':
+    def get_options(self) -> 'MutableKeyedOptionDictType':
         key = OptionKey('std', machine=self.for_machine, lang=self.language)
         return {
             key: coredata.UserComboOption(
-                'Rust Eddition to use',
-                ['none', '2015', '2018'],
+                'Rust edition to use',
+                ['none', '2015', '2018', '2021'],
                 'none',
             ),
         }
@@ -168,3 +174,34 @@ class RustCompiler(Compiler):
         for a in super().get_linker_always_args():
             args.extend(['-C', f'link-arg={a}'])
         return args
+
+    def get_werror_args(self) -> T.List[str]:
+        # Use -D warnings, which makes every warning not explicitly allowed an
+        # error
+        return ['-D', 'warnings']
+
+    def get_warn_args(self, level: str) -> T.List[str]:
+        # TODO: I'm not really sure what to put here, Rustc doesn't have warning
+        return self._WARNING_LEVELS[level]
+
+    def get_no_warn_args(self) -> T.List[str]:
+        return self._WARNING_LEVELS["0"]
+
+    def get_pic_args(self) -> T.List[str]:
+        # This defaults to
+        return ['-C', 'relocation-model=pic']
+
+    def get_pie_args(self) -> T.List[str]:
+        # Rustc currently has no way to toggle this, it's controlled by whether
+        # pic is on by rustc
+        return []
+
+
+class ClippyRustCompiler(RustCompiler):
+
+    """Clippy is a linter that wraps Rustc.
+
+    This just provides us a different id
+    """
+
+    id = 'clippy-driver rustc'

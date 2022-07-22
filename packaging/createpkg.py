@@ -22,8 +22,6 @@ import xml.etree.ElementTree as ET
 sys.path.append(os.getcwd())
 from mesonbuild import coredata
 
-from createmsi import get_modules
-
 class PkgGenerator:
 
     def __init__(self):
@@ -46,10 +44,9 @@ class PkgGenerator:
         pyinstaller_bin = '/Users/jpakkane/Library/Python/3.8/bin/pyinstaller'
         pyinst_cmd = [pyinstaller_bin,
                       '--clean',
+                      '--additional-hooks-dir=packaging',
                       '--distpath',
                       self.pkg_dir]
-        for m in get_modules():
-            pyinst_cmd += ['--hidden-import', m]
         pyinst_cmd += ['meson.py']
         subprocess.check_call(pyinst_cmd)
         tmpdir = os.path.join(self.pkg_dir, 'meson')
@@ -105,6 +102,11 @@ class PkgGenerator:
         with open(self.distribution_file, 'w') as open_file:
             open_file.write(doc.toprettyxml())
 
+    def remove_tempfiles(self):
+        shutil.rmtree('macpkg')
+        os.unlink('meson-distribution.xml')
+        os.unlink('meson.pkg')
+        os.unlink('meson.spec')
 
 if __name__ == '__main__':
     if not os.path.exists('meson.py'):
@@ -114,3 +116,4 @@ if __name__ == '__main__':
     pg = PkgGenerator()
     pg.build_dist()
     pg.build_package()
+    pg.remove_tempfiles()

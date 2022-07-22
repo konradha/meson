@@ -59,7 +59,7 @@ class GnuObjCPPCompiler(GnuCompiler, ObjCPPCompiler):
                  linker: T.Optional['DynamicLinker'] = None,
                  full_version: T.Optional[str] = None):
         ObjCPPCompiler.__init__(self, exelist, version, for_machine, is_cross,
-                              info, exe_wrapper, linker=linker, full_version=full_version)
+                                info, exe_wrapper, linker=linker, full_version=full_version)
         GnuCompiler.__init__(self, defines)
         default_warn_args = ['-Wall', '-Winvalid-pch', '-Wnon-virtual-dtor']
         self.warn_args = {'0': [],
@@ -77,7 +77,7 @@ class ClangObjCPPCompiler(ClangCompiler, ObjCPPCompiler):
                  linker: T.Optional['DynamicLinker'] = None,
                  full_version: T.Optional[str] = None):
         ObjCPPCompiler.__init__(self, exelist, version, for_machine, is_cross,
-                              info, exe_wrapper, linker=linker, full_version=full_version)
+                                info, exe_wrapper, linker=linker, full_version=full_version)
         ClangCompiler.__init__(self, defines)
         default_warn_args = ['-Wall', '-Winvalid-pch', '-Wnon-virtual-dtor']
         self.warn_args = {'0': [],
@@ -85,8 +85,7 @@ class ClangObjCPPCompiler(ClangCompiler, ObjCPPCompiler):
                           '2': default_warn_args + ['-Wextra'],
                           '3': default_warn_args + ['-Wextra', '-Wpedantic']}
 
-
-    def get_options(self) -> 'coredata.KeyedOptionDictType':
+    def get_options(self) -> 'coredata.MutableKeyedOptionDictType':
         opts = super().get_options()
         opts.update({
             OptionKey('std', machine=self.for_machine, lang='cpp'): coredata.UserComboOption(

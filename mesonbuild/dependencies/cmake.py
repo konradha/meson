@@ -11,12 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 from .base import ExternalDependency, DependencyException, DependencyTypeName
-from ..mesonlib import is_windows, MesonException, OptionKey, PerMachine, stringlistify, extract_as_list
-from ..mesondata import mesondata
-from ..cmake import CMakeExecutor, CMakeTraceParser, CMakeException, CMakeToolchain, CMakeExecScope, check_cmake_args
+from ..mesonlib import is_windows, MesonException, PerMachine, stringlistify, extract_as_list
+from ..cmake import CMakeExecutor, CMakeTraceParser, CMakeException, CMakeToolchain, CMakeExecScope, check_cmake_args, resolve_cmake_trace_targets, cmake_is_debug
 from .. import mlog
+import importlib.resources
 from pathlib import Path
 import functools
 import re
@@ -26,6 +27,7 @@ import textwrap
 import typing as T
 
 if T.TYPE_CHECKING:
+    from ..cmake import CMakeTarget
     from ..environment import Environment
     from ..envconfig import MachineInfo
 
@@ -76,10 +78,10 @@ class CMakeDependency(ExternalDependency):
         # one module
         return module
 
-    def __init__(self, name: str, environment: 'Environment', kwargs: T.Dict[str, T.Any], language: T.Optional[str] = None) -> None:
+    def __init__(self, name: str, environment: 'Environment', kwargs: T.Dict[str, T.Any], language: T.Optional[str] = None, force_use_global_compilers: bool = False) -> None:
         # Gather a list of all languages to support
         self.language_list = []  # type: T.List[str]
-        if language is None:
+        if language is None or force_use_global_compilers:
             compilers = None
             if kwargs.get('native', False):
                 compilers = environment.coredata.compilers.build
@@ -127,7 +129,7 @@ class CMakeDependency(ExternalDependency):
             return
 
         # Setup the trace parser
-        self.traceparser = CMakeTraceParser(self.cmakebin.version(), self._get_build_dir())
+        self.traceparser = CMakeTraceParser(self.cmakebin.version(), self._get_build_dir(), self.env)
 
         cm_args = stringlistify(extract_as_list(kwargs, 'cmake_args'))
         cm_args = check_cmake_args(cm_args)
@@ -166,7 +168,7 @@ class CMakeDependency(ExternalDependency):
             gen_list += [CMakeDependency.class_working_generator]
         gen_list += CMakeDependency.class_cmake_generators
 
-        temp_parser = CMakeTraceParser(self.cmakebin.version(), self._get_build_dir())
+        temp_parser = CMakeTraceParser(self.cmakebin.version(), self._get_build_dir(), self.env)
         toolchain = CMakeToolchain(self.cmakebin, self.env, self.for_machine, CMakeExecScope.DEPENDENCY, self._get_build_dir())
         toolchain.write()
 
@@ -346,6 +348,12 @@ class CMakeDependency(ExternalDependency):
         if env_path and find_module(env_path):
             return True
 
+        # Check the Linux CMake registry
+        linux_reg = Path.home() / '.cmake' / 'packages'
+        for p in [linux_reg / name, linux_reg / lname]:
+            if p.exists():
+                return True
+
         return False
 
     def _detect_dep(self, name: str, package_version: str, modules: T.List[T.Tuple[str, bool]], components: T.List[T.Tuple[str, bool]], args: T.List[str]) -> None:
@@ -446,14 +454,69 @@ class CMakeDependency(ExternalDependency):
 
         # Failed to guess a target --> try the old-style method
         if len(modules) == 0:
+            # Warn when there might be matching imported targets but no automatic match was used
+            partial_modules: T.List[CMakeTarget] = []
+            for k, v in self.traceparser.targets.items():
+                tg = k.lower()
+                lname = name.lower()
+                if tg.startswith(f'{lname}::'):
+                    partial_modules += [v]
+            if partial_modules:
+                mlog.warning(textwrap.dedent(f'''\
+                    Could not find and exact match for the CMake dependency {name}.
+
+                    However, Meson found the following partial matches:
+
+                        {[x.name for x in partial_modules]}
+
+                    Using imported is recommended, since this approach is less error prone
+                    and better supported by Meson. Consider explicitly specifying one of
+                    these in the dependency call with:
+
+                        dependency('{name}', modules: ['{name}::<name>', ...])
+
+                    Meson will now continue to use the old-style {name}_LIBRARIES CMake
+                    variables to extract the dependency information since no explicit
+                    target is currently specified.
+
+                '''))
+                mlog.debug('More info for the partial match targets:')
+                for tgt in partial_modules:
+                    mlog.debug(tgt)
+
             incDirs = [x for x in self.traceparser.get_cmake_var('PACKAGE_INCLUDE_DIRS') if x]
             defs = [x for x in self.traceparser.get_cmake_var('PACKAGE_DEFINITIONS') if x]
-            libs = [x for x in self.traceparser.get_cmake_var('PACKAGE_LIBRARIES') if x]
+            libs_raw = [x for x in self.traceparser.get_cmake_var('PACKAGE_LIBRARIES') if x]
+
+            # CMake has a "fun" API, where certain keywords describing
+            # configurations can be in the *_LIBRARIES vraiables. See:
+            # - https://github.com/mesonbuild/meson/issues/9197
+            # - https://gitlab.freedesktop.org/libnice/libnice/-/issues/140
+            # - https://cmake.org/cmake/help/latest/command/target_link_libraries.html#overview  (the last point in the section)
+            libs: T.List[str] = []
+            cfg_matches = True
+            is_debug = cmake_is_debug(self.env)
+            cm_tag_map = {'debug': is_debug, 'optimized': not is_debug, 'general': True}
+            for i in libs_raw:
+                if i.lower() in cm_tag_map:
+                    cfg_matches = cm_tag_map[i.lower()]
+                    continue
+                if cfg_matches:
+                    libs += [i]
+                # According to the CMake docs, a keyword only works for the
+                # directly the following item and all items without a keyword
+                # are implizitly `general`
+                cfg_matches = True
 
             # Try to use old style variables if no module is specified
             if len(libs) > 0:
                 self.compile_args = list(map(lambda x: f'-I{x}', incDirs)) + defs
-                self.link_args = libs
+                self.link_args = []
+                for j in libs:
+                    rtgt = resolve_cmake_trace_targets(j, self.traceparser, self.env, clib_compiler=self.clib_compiler)
+                    self.link_args += rtgt.libraries
+                    self.compile_args += [f'-I{x}' for x in rtgt.include_directories]
+                    self.compile_args += rtgt.public_compile_opts
                 mlog.debug(f'using old-style CMake variables for dependency {name}')
                 mlog.debug(f'Include Dirs:         {incDirs}')
                 mlog.debug(f'Compiler Definitions: {defs}')
@@ -468,13 +531,10 @@ class CMakeDependency(ExternalDependency):
 
         # Set dependencies with CMake targets
         # recognise arguments we should pass directly to the linker
-        reg_is_lib = re.compile(r'^(-l[a-zA-Z0-9_]+|-pthread|-delayload:[a-zA-Z0-9_\.]+|[a-zA-Z0-9_]+\.lib)$')
-        reg_is_maybe_bare_lib = re.compile(r'^[a-zA-Z0-9_]+$')
-        processed_targets = []
         incDirs = []
-        compileDefinitions = []
         compileOptions = []
         libraries = []
+
         for i, required in modules:
             if i not in self.traceparser.targets:
                 if not required:
@@ -484,103 +544,27 @@ class CMakeDependency(ExternalDependency):
                                           'Try to explicitly specify one or more targets with the "modules" property.\n'
                                           'Valid targets are:\n{}'.format(self._original_module_name(i), name, list(self.traceparser.targets.keys())))
 
-            targets = [i]
             if not autodetected_module_list:
                 self.found_modules += [i]
 
-            while len(targets) > 0:
-                curr = targets.pop(0)
-
-                # Skip already processed targets
-                if curr in processed_targets:
-                    continue
-
-                tgt = self.traceparser.targets[curr]
-                cfgs = []
-                cfg = ''
-                otherDeps = []
-                mlog.debug(tgt)
-
-                if 'INTERFACE_INCLUDE_DIRECTORIES' in tgt.properties:
-                    incDirs += [x for x in tgt.properties['INTERFACE_INCLUDE_DIRECTORIES'] if x]
-
-                if 'INTERFACE_COMPILE_DEFINITIONS' in tgt.properties:
-                    compileDefinitions += ['-D' + re.sub('^-D', '', x) for x in tgt.properties['INTERFACE_COMPILE_DEFINITIONS'] if x]
-
-                if 'INTERFACE_COMPILE_OPTIONS' in tgt.properties:
-                    compileOptions += [x for x in tgt.properties['INTERFACE_COMPILE_OPTIONS'] if x]
-
-                if 'IMPORTED_CONFIGURATIONS' in tgt.properties:
-                    cfgs = [x for x in tgt.properties['IMPORTED_CONFIGURATIONS'] if x]
-                    cfg = cfgs[0]
-
-                if OptionKey('b_vscrt') in self.env.coredata.options:
-                    is_debug = self.env.coredata.get_option(OptionKey('buildtype')) == 'debug'
-                    if self.env.coredata.options[OptionKey('b_vscrt')].value in {'mdd', 'mtd'}:
-                        is_debug = True
-                else:
-                    # Don't directly assign to is_debug to make mypy happy
-                    debug_opt = self.env.coredata.get_option(OptionKey('debug'))
-                    assert isinstance(debug_opt, bool)
-                    is_debug = debug_opt
-                if is_debug:
-                    if 'DEBUG' in cfgs:
-                        cfg = 'DEBUG'
-                    elif 'RELEASE' in cfgs:
-                        cfg = 'RELEASE'
-                else:
-                    if 'RELEASE' in cfgs:
-                        cfg = 'RELEASE'
-
-                if f'IMPORTED_IMPLIB_{cfg}' in tgt.properties:
-                    libraries += [x for x in tgt.properties[f'IMPORTED_IMPLIB_{cfg}'] if x]
-                elif 'IMPORTED_IMPLIB' in tgt.properties:
-                    libraries += [x for x in tgt.properties['IMPORTED_IMPLIB'] if x]
-                elif f'IMPORTED_LOCATION_{cfg}' in tgt.properties:
-                    libraries += [x for x in tgt.properties[f'IMPORTED_LOCATION_{cfg}'] if x]
-                elif 'IMPORTED_LOCATION' in tgt.properties:
-                    libraries += [x for x in tgt.properties['IMPORTED_LOCATION'] if x]
-
-                if 'INTERFACE_LINK_LIBRARIES' in tgt.properties:
-                    otherDeps += [x for x in tgt.properties['INTERFACE_LINK_LIBRARIES'] if x]
-
-                if f'IMPORTED_LINK_DEPENDENT_LIBRARIES_{cfg}' in tgt.properties:
-                    otherDeps += [x for x in tgt.properties[f'IMPORTED_LINK_DEPENDENT_LIBRARIES_{cfg}'] if x]
-                elif 'IMPORTED_LINK_DEPENDENT_LIBRARIES' in tgt.properties:
-                    otherDeps += [x for x in tgt.properties['IMPORTED_LINK_DEPENDENT_LIBRARIES'] if x]
-
-                for j in otherDeps:
-                    if j in self.traceparser.targets:
-                        targets += [j]
-                    elif reg_is_lib.match(j):
-                        libraries += [j]
-                    elif os.path.isabs(j) and os.path.exists(j):
-                        libraries += [j]
-                    elif self.env.machines.build.is_windows() and reg_is_maybe_bare_lib.match(j):
-                        # On Windows, CMake library dependencies can be passed as bare library names,
-                        # e.g. 'version' should translate into 'version.lib'. CMake brute-forces a
-                        # combination of prefix/suffix combinations to find the right library, however
-                        # as we do not have a compiler environment available to us, we cannot do the
-                        # same, but must assume any bare argument passed which is not also a CMake
-                        # target must be a system library we should try to link against
-                        libraries += [f"{j}.lib"]
-                    else:
-                        mlog.warning('CMake: Dependency', mlog.bold(j), 'for', mlog.bold(name), 'target', mlog.bold(self._original_module_name(curr)), 'was not found')
-
-                processed_targets += [curr]
+            rtgt = resolve_cmake_trace_targets(i, self.traceparser, self.env,
+                clib_compiler=self.clib_compiler,
+                not_found_warning=lambda x: mlog.warning('CMake: Dependency', mlog.bold(x), 'for', mlog.bold(name), 'was not found')
+            )
+            incDirs        += rtgt.include_directories
+            compileOptions += rtgt.public_compile_opts
+            libraries      += rtgt.libraries + rtgt.link_flags
 
         # Make sure all elements in the lists are unique and sorted
         incDirs = sorted(set(incDirs))
-        compileDefinitions = sorted(set(compileDefinitions))
         compileOptions = sorted(set(compileOptions))
         libraries = sorted(set(libraries))
 
         mlog.debug(f'Include Dirs:         {incDirs}')
-        mlog.debug(f'Compiler Definitions: {compileDefinitions}')
         mlog.debug(f'Compiler Options:     {compileOptions}')
         mlog.debug(f'Libraries:            {libraries}')
 
-        self.compile_args = compileOptions + compileDefinitions + [f'-I{x}' for x in incDirs]
+        self.compile_args = compileOptions + [f'-I{x}' for x in incDirs]
         self.link_args = libraries
 
     def _get_build_dir(self) -> Path:
@@ -600,7 +584,7 @@ class CMakeDependency(ExternalDependency):
         shutil.rmtree(cmake_files.as_posix(), ignore_errors=True)
 
         # Insert language parameters into the CMakeLists.txt and write new CMakeLists.txt
-        cmake_txt = mesondata['dependencies/data/' + cmake_file].data
+        cmake_txt = importlib.resources.read_text('mesonbuild.dependencies.data', cmake_file, encoding = 'utf-8')
 
         # In general, some Fortran CMake find_package() also require C language enabled,
         # even if nothing from C is directly used. An easy Fortran example that fails
@@ -645,17 +629,23 @@ class CMakeDependency(ExternalDependency):
     def get_variable(self, *, cmake: T.Optional[str] = None, pkgconfig: T.Optional[str] = None,
                      configtool: T.Optional[str] = None, internal: T.Optional[str] = None,
                      default_value: T.Optional[str] = None,
-                     pkgconfig_define: T.Optional[T.List[str]] = None) -> T.Union[str, T.List[str]]:
+                     pkgconfig_define: T.Optional[T.List[str]] = None) -> str:
         if cmake and self.traceparser is not None:
             try:
                 v = self.traceparser.vars[cmake]
             except KeyError:
                 pass
             else:
-                if len(v) == 1:
-                    return v[0]
-                elif v:
-                    return v
+                # CMake does NOT have a list datatype. We have no idea whether
+                # anything is a string or a string-separated-by-; Internally,
+                # we treat them as the latter and represent everything as a
+                # list, because it is convenient when we are mostly handling
+                # imported targets, which have various properties that are
+                # actually lists.
+                #
+                # As a result we need to convert them back to strings when grabbing
+                # raw variables the user requested.
+                return ';'.join(v)
         if default_value is not None:
             return default_value
         raise DependencyException(f'Could not get cmake variable and no default provided for {self!r}')

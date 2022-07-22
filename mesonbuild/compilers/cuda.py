@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import enum
 import os.path
@@ -20,19 +21,21 @@ import typing as T
 from .. import coredata
 from .. import mlog
 from ..mesonlib import (
-    EnvironmentException, MachineChoice, Popen_safe, OptionOverrideProxy,
+    EnvironmentException, Popen_safe, OptionOverrideProxy,
     is_windows, LibType, OptionKey,
 )
 from .compilers import (Compiler, cuda_buildtype_args, cuda_optimization_args,
-                        cuda_debug_args, CompileCheckMode)
+                        cuda_debug_args)
 
 if T.TYPE_CHECKING:
+    from .compilers import CompileCheckMode
     from ..build import BuildTarget
-    from ..coredata import KeyedOptionDictType
+    from ..coredata import MutableKeyedOptionDictType, KeyedOptionDictType
     from ..dependencies import Dependency
     from ..environment import Environment  # noqa: F401
     from ..envconfig import MachineInfo
     from ..linkers import DynamicLinker
+    from ..mesonlib import MachineChoice
     from ..programs import ExternalProgram
 
 
@@ -171,7 +174,9 @@ class CudaCompiler(Compiler):
         '--qpp-config':                         '-qpp-config',                  # 4.2.8.19
     }
     # Reverse map -short to --long options.
-    _FLAG_SHORT2LONG_WITHARGS = {v:k for k,v in _FLAG_LONG2SHORT_WITHARGS.items()}
+    _FLAG_SHORT2LONG_WITHARGS = {v: k for k, v in _FLAG_LONG2SHORT_WITHARGS.items()}
+
+    id = 'nvcc'
 
     def __init__(self, exelist: T.List[str], version: str, for_machine: MachineChoice,
                  is_cross: bool, exe_wrapper: T.Optional['ExternalProgram'],
@@ -182,11 +187,10 @@ class CudaCompiler(Compiler):
         self.exe_wrapper = exe_wrapper
         self.host_compiler = host_compiler
         self.base_options = host_compiler.base_options
-        self.id = 'nvcc'
         self.warn_args = {level: self._to_host_flags(flags) for level, flags in host_compiler.warn_args.items()}
 
     @classmethod
-    def _shield_nvcc_list_arg(cls, arg: str, listmode: bool=True) -> str:
+    def _shield_nvcc_list_arg(cls, arg: str, listmode: bool = True) -> str:
         r"""
         Shield an argument against both splitting by NVCC's list-argument
         parse logic, and interpretation by any shell.
@@ -195,7 +199,7 @@ class CudaCompiler(Compiler):
         a double-quoted string a split-point. Single-quotes do not provide protection
         against splitting; In fact, after splitting they are \-escaped. Unfortunately,
         double-quotes don't protect against shell expansion. What follows is a
-        complex dance to accomodate everybody.
+        complex dance to accommodate everybody.
         """
 
         SQ = "'"
@@ -258,10 +262,13 @@ class CudaCompiler(Compiler):
 
         def is_xcompiler_flag_isolated(flag: str) -> bool:
             return flag == '-Xcompiler'
+
         def is_xcompiler_flag_glued(flag: str) -> bool:
             return flag.startswith('-Xcompiler=')
+
         def is_xcompiler_flag(flag: str) -> bool:
             return is_xcompiler_flag_isolated(flag) or is_xcompiler_flag_glued(flag)
+
         def get_xcompiler_val(flag: str, flagit: T.Iterator[str]) -> str:
             if is_xcompiler_flag_glued(flag):
                 return flag[len('-Xcompiler='):]
@@ -319,7 +326,7 @@ class CudaCompiler(Compiler):
             #     follow the name of the option itself by either one of more spaces or an
             #     equals character. When a one-character short name such as -I, -l, and -L
             #     is used, the value of the option may also immediately follow the option
-            #     itself without being seperated by spaces or an equal character. The
+            #     itself without being separated by spaces or an equal character. The
             #     individual values of list options may be separated by commas in a single
             #     instance of the option, or the option may be repeated, or any
             #     combination of these two cases.
@@ -356,7 +363,6 @@ class CudaCompiler(Compiler):
                 xflags.append(flag)
                 continue
 
-
             # Handle breakup of flag-values into a flag-part and value-part.
             if   flag[:1] not in '-/':
                 # This is not a flag. It's probably a file input. Pass it through.
@@ -391,11 +397,11 @@ class CudaCompiler(Compiler):
                     val = next(flagit)           # -o something
                 except StopIteration:
                     pass
-            elif flag.split('=',1)[0] in self._FLAG_LONG2SHORT_WITHARGS or \
-                 flag.split('=',1)[0] in self._FLAG_SHORT2LONG_WITHARGS:
+            elif flag.split('=', 1)[0] in self._FLAG_LONG2SHORT_WITHARGS or \
+                 flag.split('=', 1)[0] in self._FLAG_SHORT2LONG_WITHARGS:
                 # This is either -o or a multi-letter flag, and it is receiving its
                 # value after an = sign.
-                flag, val = flag.split('=',1)    # -o=something
+                flag, val = flag.split('=', 1)    # -o=something
             # Some dependencies (e.g., BoostDependency) add unspaced "-isystem/usr/include" arguments
             elif flag.startswith('-isystem'):
                 val = flag[8:].strip()
@@ -425,14 +431,12 @@ class CudaCompiler(Compiler):
                     # The above should securely handle GCC's -Wl, -Wa, -Wp, arguments.
                 continue
 
-
             assert val is not None  # Should only trip if there is a missing argument.
 
-
             # Take care of the various NVCC-supported flags that need special handling.
-            flag = self._FLAG_LONG2SHORT_WITHARGS.get(flag,flag)
+            flag = self._FLAG_LONG2SHORT_WITHARGS.get(flag, flag)
 
-            if   flag in {'-include','-isystem','-I','-L','-l'}:
+            if   flag in {'-include', '-isystem', '-I', '-L', '-l'}:
                 # These flags are known to GCC, but list-valued in NVCC. They potentially
                 # require double-quoting to prevent NVCC interpreting the flags as lists
                 # when GCC would not have done so.
@@ -611,7 +615,7 @@ class CudaCompiler(Compiler):
         }}'''
         return self.compiles(t.format_map(fargs), env, extra_args=extra_args, dependencies=dependencies)
 
-    def get_options(self) -> 'KeyedOptionDictType':
+    def get_options(self) -> 'MutableKeyedOptionDictType':
         opts = super().get_options()
         std_key      = OptionKey('std',      machine=self.for_machine, lang=self.language)
         ccbindir_key = OptionKey('ccbindir', machine=self.for_machine, lang=self.language)
@@ -630,12 +634,9 @@ class CudaCompiler(Compiler):
 
         # We must strip the -std option from the host compiler option set, as NVCC has
         # its own -std flag that may not agree with the host compiler's.
-        overrides = {name: opt.value for name, opt in options.items()}
-        overrides.pop(OptionKey('std', machine=self.for_machine,
-                                       lang=self.host_compiler.language), None)
-        host_options = self.host_compiler.get_options().copy()
-        if 'std' in host_options:
-            del host_options['std'] # type: ignore
+        host_options = {key: options.get(key, opt) for key, opt in self.host_compiler.get_options().items()}
+        std_key = OptionKey('std', machine=self.for_machine, lang=self.host_compiler.language)
+        overrides = {std_key: 'none'}
         return OptionOverrideProxy(overrides, host_options)
 
     def get_option_compile_args(self, options: 'KeyedOptionDictType') -> T.List[str]:
@@ -712,7 +713,7 @@ class CudaCompiler(Compiler):
         return self._to_host_flags(self.host_compiler.get_buildtype_linker_args(buildtype), _Phase.LINKER)
 
     def build_rpath_args(self, env: 'Environment', build_dir: str, from_dir: str,
-                         rpath_paths: str, build_rpath: str,
+                         rpath_paths: T.Tuple[str, ...], build_rpath: str,
                          install_rpath: str) -> T.Tuple[T.List[str], T.Set[bytes]]:
         (rpath_args, rpath_dirs_to_remove) = self.host_compiler.build_rpath_args(
             env, build_dir, from_dir, rpath_paths, build_rpath, install_rpath)

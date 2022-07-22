@@ -18,109 +18,18 @@ import sys
 sys.modules['pathlib'] = _pathlib
 
 import os.path
+import platform
 import importlib
 import traceback
 import argparse
-import codecs
 import shutil
 
 from . import mesonlib
 from . import mlog
 from . import mconf, mdist, minit, minstall, mintro, msetup, mtest, rewriter, msubprojects, munstable_coredata, mcompile, mdevenv
-from .mesonlib import MesonException
-from .environment import detect_msys2_arch
+from .mesonlib import MesonException, MesonBugException
 from .wrap import wraptool
-
-need_setup_vsenv = False
-
-bat_template = '''@ECHO OFF
-
-call "{}"
-
-ECHO {}
-SET
-'''
-
-# If on Windows and VS is installed but not set up in the environment,
-# set it to be runnable. In this way Meson can be directly invoked
-# from any shell, VS Code etc.
-def setup_vsenv() -> None:
-    import subprocess, json, pathlib
-    if not mesonlib.is_windows():
-        return
-    bat_placeholder = 'nananananananananananananananana'
-    # If an existing build tool chain exists in PATH -> do nothing.
-    if shutil.which('cc'):
-        return
-    if shutil.which('gcc'):
-        return
-    if shutil.which('clang'):
-        return
-    if shutil.which('clang-cl'):
-        return
-    if os.environ.get('OSTYPE', bat_placeholder) == 'cygwin':
-        return
-    if 'Visual Studio' in os.environ['PATH']:
-        return
-    # VSINSTALL is set when running setvars from a Visual Studio installation
-    # Tested with Visual Studio 2012 and 2017
-    if 'VSINSTALLDIR' in os.environ:
-        return
-    # Check explicitly for cl when on Windows
-    if shutil.which('cl.exe'):
-        return
-
-    root = os.environ.get("ProgramFiles(x86)") or os.environ.get("ProgramFiles")
-    bat_locator_bin = pathlib.Path(root, 'Microsoft Visual Studio/Installer/vswhere.exe')
-    if not bat_locator_bin.exists():
-        return
-    bat_json = subprocess.check_output(
-        [
-            str(bat_locator_bin),
-            '-latest',
-            '-prerelease',
-            '-requiresAny',
-            '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
-            '-products', '*',
-            '-utf8',
-            '-format',
-            'json'
-        ]
-    )
-    bat_info = json.loads(bat_json)
-    if not bat_info:
-        # VS installer instelled but not VS itself maybe?
-        return
-    print('Activating VS', bat_info[0]['catalog']['productDisplayVersion'])
-    bat_root = pathlib.Path(bat_info[0]['installationPath'])
-    bat_path = bat_root / 'VC/Auxiliary/Build/vcvars64.bat'
-    if not bat_path.exists():
-        return
-
-    bat_file = pathlib.Path.home() / 'vsdetect.bat'
-
-    bat_separator = '---SPLIT---'
-    bat_contents = bat_template.format(bat_path, bat_separator)
-    bat_file.write_text(bat_contents, encoding='utf-8')
-    try:
-        bat_output = subprocess.check_output(str(bat_file), universal_newlines=True)
-    finally:
-        bat_file.unlink()
-    bat_lines = bat_output.split('\n')
-    bat_separator_seen = False
-    for bat_line in bat_lines:
-        if bat_line == bat_separator:
-            bat_separator_seen = True
-            continue
-        if not bat_separator_seen:
-            continue
-        if not bat_line:
-            continue
-        k, v = bat_line.split('=', 1)
-        os.environ[k] = v
-    global need_setup_vsenv
-    need_setup_vsenv = True
-
+from .scripts import env2mfile
 
 # Note: when adding arguments, please also add them to the completion
 # scripts in $MESONSRC/data/shell-completions/
@@ -152,14 +61,17 @@ class CommandLineParser:
                          help_msg='Wrap tools')
         self.add_command('subprojects', msubprojects.add_arguments, msubprojects.run,
                          help_msg='Manage subprojects')
-        self.add_command('help', self.add_help_arguments, self.run_help_command,
-                         help_msg='Print help of a subcommand')
         self.add_command('rewrite', lambda parser: rewriter.add_arguments(parser, self.formatter), rewriter.run,
                          help_msg='Modify the project definition')
         self.add_command('compile', mcompile.add_arguments, mcompile.run,
                          help_msg='Build the project')
         self.add_command('devenv', mdevenv.add_arguments, mdevenv.run,
                          help_msg='Run commands in developer environment')
+        self.add_command('env2mfile', env2mfile.add_arguments, env2mfile.run,
+                         help_msg='Convert current environment to a cross or native file')
+        # Add new commands above this line to list them in help command
+        self.add_command('help', self.add_help_arguments, self.run_help_command,
+                         help_msg='Print help of a subcommand')
 
         # Hidden commands
         self.add_command('runpython', self.add_runpython_arguments, self.run_runpython_command,
@@ -181,8 +93,9 @@ class CommandLineParser:
         for i in [name] + aliases:
             self.commands[i] = p
 
-    def add_runpython_arguments(self, parser):
+    def add_runpython_arguments(self, parser: argparse.ArgumentParser):
         parser.add_argument('-c', action='store_true', dest='eval_arg', default=False)
+        parser.add_argument('--version', action='version', version=platform.python_version())
         parser.add_argument('script_file')
         parser.add_argument('script_args', nargs=argparse.REMAINDER)
 
@@ -197,7 +110,7 @@ class CommandLineParser:
         return 0
 
     def add_help_arguments(self, parser):
-        parser.add_argument('command', nargs='?')
+        parser.add_argument('command', nargs='?', choices=list(self.commands.keys()))
 
     def run_help_command(self, options):
         if options.command:
@@ -207,6 +120,7 @@ class CommandLineParser:
         return 0
 
     def run(self, args):
+        pending_python_deprecation_notice = False
         # If first arg is not a known command, assume user wants to run the setup
         # command.
         known_commands = list(self.commands.keys()) + ['-h', '--help']
@@ -220,9 +134,19 @@ class CommandLineParser:
             args = args[1:]
         else:
             parser = self.parser
+            command = None
 
         args = mesonlib.expand_arguments(args)
         options = parser.parse_args(args)
+
+        if command is None:
+            command = options.command
+
+        # Bump the version here in order to add a pre-exit warning that we are phasing out
+        # support for old python. If this is already the oldest supported version, then
+        # this can never be true and does nothing.
+        if command in ('setup', 'compile', 'test', 'install') and sys.version_info < (3, 7):
+            pending_python_deprecation_notice = True
 
         try:
             return options.run_func(options)
@@ -234,12 +158,28 @@ class CommandLineParser:
             if os.environ.get('MESON_FORCE_BACKTRACE'):
                 raise
             return 1
-        except Exception:
+        except Exception as e:
             if os.environ.get('MESON_FORCE_BACKTRACE'):
                 raise
             traceback.print_exc()
+            # We assume many types of traceback are Meson logic bugs, but most
+            # particularly anything coming from the interpreter during `setup`.
+            # Some things definitely aren't:
+            # - PermissionError is always a problem in the user environment
+            # - runpython doesn't run Meson's own code, even though it is
+            #   dispatched by our run()
+            if command != 'runpython' and not isinstance(e, PermissionError):
+                msg = 'Unhandled python exception'
+                if all(getattr(e, a, None) is not None for a in ['file', 'lineno', 'colno']):
+                    e = MesonBugException(msg, e.file, e.lineno, e.colno) # type: ignore
+                else:
+                    e = MesonBugException(msg)
+                mlog.exception(e)
             return 2
         finally:
+            if pending_python_deprecation_notice:
+                mlog.notice('You are using Python 3.6 which is EOL. Starting with v0.62.0, '
+                            'Meson will require Python 3.7 or newer', fatal=False)
             mlog.shutdown()
 
 def run_script_command(script_name, script_args):
@@ -267,21 +207,13 @@ def run_script_command(script_name, script_args):
 
 def ensure_stdout_accepts_unicode():
     if sys.stdout.encoding and not sys.stdout.encoding.upper().startswith('UTF-'):
-        if sys.version_info >= (3, 7):
-            sys.stdout.reconfigure(errors='surrogateescape')
-        else:
-            sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach(),
-                                                   errors='surrogateescape')
-            sys.stdout.encoding = 'UTF-8'
-            if not hasattr(sys.stdout, 'buffer'):
-                sys.stdout.buffer = sys.stdout.raw if hasattr(sys.stdout, 'raw') else sys.stdout
+        sys.stdout.reconfigure(errors='surrogateescape')
 
 def run(original_args, mainfile):
-    if sys.version_info < (3, 6):
-        print('Meson works correctly only with python 3.6+.')
-        print(f'You have python {sys.version}.')
-        print('Please update your environment')
-        return 1
+    if sys.version_info >= (3, 10) and os.environ.get('MESON_RUNNING_IN_PROJECT_TESTS'):
+        # workaround for https://bugs.python.org/issue34624
+        import warnings
+        warnings.filterwarnings('error', category=EncodingWarning, module='mesonbuild')
 
     # Meson gets confused if stdout can't output Unicode, if the
     # locale isn't Unicode, just force stdout to accept it. This tries
@@ -289,13 +221,9 @@ def run(original_args, mainfile):
     ensure_stdout_accepts_unicode()
 
     # https://github.com/mesonbuild/meson/issues/3653
-    if sys.platform.lower() == 'msys':
-        mlog.error('This python3 seems to be msys/python on MSYS2 Windows, which is known to have path semantics incompatible with Meson')
-        msys2_arch = detect_msys2_arch()
-        if msys2_arch:
-            mlog.error('Please install and use mingw-w64-i686-python3 and/or mingw-w64-x86_64-python3 with Pacman')
-        else:
-            mlog.error('Please download and use Python as detailed at: https://mesonbuild.com/Getting-meson.html')
+    if sys.platform == 'cygwin' and os.environ.get('MSYSTEM', '') not in ['MSYS', '']:
+        mlog.error('This python3 seems to be msys/python on MSYS2 Windows, but you are in a MinGW environment')
+        mlog.error('Please install and use mingw-w64-x86_64-python3 and/or mingw-w64-x86_64-meson with Pacman')
         return 2
 
     # Set the meson command that will be used to run scripts and so on
@@ -316,7 +244,6 @@ def run(original_args, mainfile):
     return CommandLineParser().run(args)
 
 def main():
-    setup_vsenv()
     # Always resolve the command path so Ninja can find it for regen, tests, etc.
     if 'meson.exe' in sys.executable:
         assert os.path.isabs(sys.executable)

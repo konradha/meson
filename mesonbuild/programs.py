@@ -100,28 +100,35 @@ class ExternalProgram(mesonlib.HoldableObject):
         '''Human friendly description of the command'''
         return ' '.join(self.command)
 
-    def get_version(self, interpreter: 'Interpreter') -> str:
+    def get_version(self, interpreter: T.Optional['Interpreter'] = None) -> str:
         if not self.cached_version:
+            from . import build
             raw_cmd = self.get_command() + ['--version']
-            cmd: T.List[T.Union[str, ExternalProgram]] = [self, '--version']
-            res = interpreter.run_command_impl(interpreter.current_node, cmd, {}, True)
-            if res.returncode != 0:
-                m = 'Running {!r} failed'
-                raise mesonlib.MesonException(m.format(raw_cmd))
-            output = res.stdout.strip()
+            if interpreter:
+                res = interpreter.run_command_impl(interpreter.current_node, (self, ['--version']),
+                                                   {'capture': True,
+                                                    'check': True,
+                                                    'env': build.EnvironmentVariables()},
+                                                   True)
+                o, e = res.stdout, res.stderr
+            else:
+                p, o, e = mesonlib.Popen_safe(raw_cmd)
+                if p.returncode != 0:
+                    cmd_str = mesonlib.join_args(raw_cmd)
+                    raise mesonlib.MesonException(f'Command {cmd_str!r} failed with status {p.returncode}.')
+            output = o.strip()
             if not output:
-                output = res.stderr.strip()
+                output = e.strip()
             match = re.search(r'([0-9][0-9\.]+)', output)
             if not match:
-                m = 'Could not find a version number in output of {!r}'
-                raise mesonlib.MesonException(m.format(raw_cmd))
+                raise mesonlib.MesonException(f'Could not find a version number in output of {raw_cmd!r}')
             self.cached_version = match.group(1)
         return self.cached_version
 
     @classmethod
     def from_bin_list(cls, env: 'Environment', for_machine: MachineChoice, name: str) -> 'ExternalProgram':
         # There is a static `for_machine` for this class because the binary
-        # aways runs on the build platform. (It's host platform is our build
+        # always runs on the build platform. (It's host platform is our build
         # platform.) But some external programs have a target platform, so this
         # is what we are specifying here.
         command = env.lookup_binary_entry(for_machine, name)

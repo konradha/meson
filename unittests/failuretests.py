@@ -169,12 +169,12 @@ class FailureTests(BasePlatformTests):
                                "requires at least one module")
 
     def test_extraframework_dependency_method(self):
-        code = "dependency('python', method : 'extraframework')"
+        code = "dependency('metal', method : 'extraframework')"
         if not is_osx():
             self.assertMesonRaises(code, self.dnf)
         else:
-            # Python2 framework is always available on macOS
-            self.assertMesonOutputs(code, '[Dd]ependency.*python.*found.*YES')
+            # metal framework is always available on macOS
+            self.assertMesonOutputs(code, '[Dd]ependency.*metal.*found.*YES')
 
     def test_sdl2_notfound_dependency(self):
         # Want to test failure, so skip if available
@@ -314,18 +314,18 @@ class FailureTests(BasePlatformTests):
     def test_using_too_recent_feature(self):
         # Here we use a dict, which was introduced in 0.47.0
         self.assertMesonOutputs("dict = {}",
-                                ".*WARNING.*Project targeting.*but.*",
+                                ".*WARNING.*Project targets.*but.*",
                                 meson_version='>= 0.46.0')
 
     def test_using_recent_feature(self):
         # Same as above, except the meson version is now appropriate
         self.assertMesonDoesNotOutput("dict = {}",
-                                      ".*WARNING.*Project targeting.*but.*",
+                                      ".*WARNING.*Project targets.*but.*",
                                       meson_version='>= 0.47')
 
     def test_using_too_recent_feature_dependency(self):
         self.assertMesonOutputs("dependency('pcap', required: false)",
-                                ".*WARNING.*Project targeting.*but.*",
+                                ".*WARNING.*Project targets.*but.*",
                                 meson_version='>= 0.41.0')
 
     def test_vcs_tag_featurenew_build_always_stale(self):

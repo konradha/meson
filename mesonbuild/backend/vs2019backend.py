@@ -11,20 +11,25 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import os
 import typing as T
 import xml.etree.ElementTree as ET
 
 from .vs2010backend import Vs2010Backend
-from ..interpreter import Interpreter
-from ..build import Build
+
+if T.TYPE_CHECKING:
+    from ..build import Build
+    from ..interpreter import Interpreter
 
 
 class Vs2019Backend(Vs2010Backend):
     def __init__(self, build: T.Optional[Build], interpreter: T.Optional[Interpreter]):
         super().__init__(build, interpreter)
         self.name = 'vs2019'
+        self.sln_file_version = '12.00'
+        self.sln_version_comment = 'Version 16'
         if self.environment is not None:
             comps = self.environment.coredata.compilers.host
             if comps and all(c.id == 'clang-cl' for c in comps.values()):
@@ -45,3 +50,13 @@ class Vs2019Backend(Vs2010Backend):
     def generate_debug_information(self, link):
         # valid values for vs2019 is 'false', 'true', 'DebugFastLink', 'DebugFull'
         ET.SubElement(link, 'GenerateDebugInformation').text = 'DebugFull'
+
+    def generate_lang_standard_info(self, file_args, clconf):
+        if 'cpp' in file_args:
+            optargs = [x for x in file_args['cpp'] if x.startswith('/std:c++')]
+            if optargs:
+                ET.SubElement(clconf, 'LanguageStandard').text = optargs[0].replace("/std:c++", "stdcpp")
+        if 'c' in file_args:
+            optargs = [x for x in file_args['c'] if x.startswith('/std:c')]
+            if optargs:
+                ET.SubElement(clconf, 'LanguageStandard_C').text = optargs[0].replace("/std:c", "stdc")

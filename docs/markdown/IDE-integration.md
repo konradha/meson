@@ -79,7 +79,7 @@ project.
 
 *(New in 0.56.0)* The `extra_files` key lists all files specified via
 the `extra_files` kwarg of a build target. See
-[`executable()`](Reference-manual.md#executable).
+[[executable]].
 
 A target usually generates only one file. However, it is possible for
 custom targets to have multiple outputs.
@@ -404,6 +404,17 @@ linked to the internal Meson AST. However, breaking changes (removal
 of a node type or the removal of a key) are unlikely and will be
 announced in the release notes.
 
+
+# JSON Reference manual
+
+In additional to the online [Reference manual](Reference-manual.md), Meson also
+offers the manual as JSON file. The content of this file is generated from the
+same source as the online documentation. The two versions are thus identical
+in content.
+
+This JSON document is attached to every Meson release since *0.60.0*. The JSON
+schema is defined by the class structure given in
+[`jsonschema.py`](https://github.com/mesonbuild/meson/blob/master/docs/refman/jsonschema.py)
 
 # Existing integrations
 

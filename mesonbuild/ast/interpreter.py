@@ -14,8 +14,12 @@
 
 # This class contains the basic functionality needed to run any interpreter
 # or an interpreter-based tool.
+from __future__ import annotations
 
-from .visitor import AstVisitor
+import os
+import sys
+import typing as T
+
 from .. import mparser, mesonlib
 from .. import environment
 
@@ -26,34 +30,44 @@ from ..interpreterbase import (
     BreakRequest,
     ContinueRequest,
     default_resolve_key,
-    TYPE_nvar,
-    TYPE_nkwargs,
+)
+
+from ..interpreter import (
+    StringHolder,
+    BooleanHolder,
+    IntegerHolder,
+    ArrayHolder,
+    DictHolder,
 )
 
 from ..mparser import (
-    AndNode,
     ArgumentNode,
     ArithmeticNode,
     ArrayNode,
     AssignmentNode,
     BaseNode,
-    ComparisonNode,
     ElementaryNode,
     EmptyNode,
-    ForeachClauseNode,
     IdNode,
-    IfClauseNode,
-    IndexNode,
     MethodNode,
     NotNode,
-    OrNode,
     PlusAssignmentNode,
     TernaryNode,
-    UMinusNode,
 )
 
-import os, sys
-import typing as T
+if T.TYPE_CHECKING:
+    from .visitor import AstVisitor
+    from ..interpreter import Interpreter
+    from ..interpreterbase import TYPE_nkwargs, TYPE_nvar
+    from ..mparser import (
+        AndNode,
+        ComparisonNode,
+        ForeachClauseNode,
+        IfClauseNode,
+        IndexNode,
+        OrNode,
+        UMinusNode,
+    )
 
 class DontCareObject(MesonInterpreterObject):
     pass
@@ -94,6 +108,8 @@ class AstInterpreter(InterpreterBase):
                            'install_man': self.func_do_nothing,
                            'install_data': self.func_do_nothing,
                            'install_subdir': self.func_do_nothing,
+                           'install_symlink': self.func_do_nothing,
+                           'install_emptydir': self.func_do_nothing,
                            'configuration_data': self.func_do_nothing,
                            'configure_file': self.func_do_nothing,
                            'find_program': self.func_do_nothing,
@@ -101,6 +117,7 @@ class AstInterpreter(InterpreterBase):
                            'add_global_arguments': self.func_do_nothing,
                            'add_global_link_arguments': self.func_do_nothing,
                            'add_project_arguments': self.func_do_nothing,
+                           'add_project_dependencies': self.func_do_nothing,
                            'add_project_link_arguments': self.func_do_nothing,
                            'message': self.func_do_nothing,
                            'generator': self.func_do_nothing,
@@ -143,6 +160,8 @@ class AstInterpreter(InterpreterBase):
                            'alias_target': self.func_do_nothing,
                            'summary': self.func_do_nothing,
                            'range': self.func_do_nothing,
+                           'structured_sources': self.func_do_nothing,
+                           'debug': self.func_do_nothing,
                            })
 
     def _unholder_args(self, args: _T, kwargs: _V) -> T.Tuple[_T, _V]:
@@ -201,6 +220,9 @@ class AstInterpreter(InterpreterBase):
     def evaluate_fstring(self, node: mparser.FormatStringNode) -> str:
         assert isinstance(node, mparser.FormatStringNode)
         return node.value
+
+    def evaluate_arraystatement(self, cur: mparser.ArrayNode) -> TYPE_nvar:
+        return self.reduce_arguments(cur.args)[0]
 
     def evaluate_arithmeticstatement(self, cur: ArithmeticNode) -> int:
         self.evaluate_statement(cur.left)
@@ -364,17 +386,15 @@ class AstInterpreter(InterpreterBase):
             mkwargs = {} # type: T.Dict[str, TYPE_nvar]
             try:
                 if isinstance(src, str):
-                    result = self.string_method_call(src, node.name, margs, mkwargs)
+                    result = StringHolder(src, T.cast('Interpreter', self)).method_call(node.name, margs, mkwargs)
                 elif isinstance(src, bool):
-                    from ..interpreter import Interpreter, BooleanHolder
-                    result = BooleanHolder(src, T.cast(Interpreter, self)).method_call(node.name, margs, mkwargs)
+                    result = BooleanHolder(src, T.cast('Interpreter', self)).method_call(node.name, margs, mkwargs)
                 elif isinstance(src, int):
-                    from ..interpreter import Interpreter, IntegerHolder
-                    result = IntegerHolder(src, T.cast(Interpreter, self)).method_call(node.name, margs, mkwargs)
+                    result = IntegerHolder(src, T.cast('Interpreter', self)).method_call(node.name, margs, mkwargs)
                 elif isinstance(src, list):
-                    result = self.array_method_call(src, node.name, margs, mkwargs)
+                    result = ArrayHolder(src, T.cast('Interpreter', self)).method_call(node.name, margs, mkwargs)
                 elif isinstance(src, dict):
-                    result = self.dict_method_call(src, node.name, margs, mkwargs)
+                    result = DictHolder(src, T.cast('Interpreter', self)).method_call(node.name, margs, mkwargs)
             except mesonlib.MesonException:
                 return None
 

@@ -47,17 +47,14 @@ from functools import lru_cache
 from mesonbuild import envconfig
 
 if T.TYPE_CHECKING:
+    import argparse
     from configparser import ConfigParser
 
-    from .dependencies import ExternalProgram
     from .wrap.wrap import Resolver
 
 build_filename = 'meson.build'
 
 CompilersDict = T.Dict[str, Compiler]
-
-if T.TYPE_CHECKING:
-    import argparse
 
 
 def _get_env_var(for_machine: MachineChoice, is_cross: bool, var_name: str) -> T.Optional[str]:
@@ -70,7 +67,7 @@ def _get_env_var(for_machine: MachineChoice, is_cross: bool, var_name: str) -> T
         # allows native builds to never need to worry about the 'BUILD_*'
         # ones.
         ([var_name + '_FOR_BUILD'] if is_cross else [var_name]),
-        # Always just the unprefixed host verions
+        # Always just the unprefixed host versions
         [var_name]
     )[for_machine]
     for var in candidates:
@@ -85,7 +82,7 @@ def _get_env_var(for_machine: MachineChoice, is_cross: bool, var_name: str) -> T
     return value
 
 
-def detect_gcovr(min_version='3.3', new_rootdir_version='4.2', log=False):
+def detect_gcovr(min_version='3.3', log=False):
     gcovr_exe = 'gcovr'
     try:
         p, found = Popen_safe([gcovr_exe, '--version'])[0:2]
@@ -96,7 +93,7 @@ def detect_gcovr(min_version='3.3', new_rootdir_version='4.2', log=False):
     if p.returncode == 0 and mesonlib.version_compare(found, '>=' + min_version):
         if log:
             mlog.log('Found gcovr-{} at {}'.format(found, quote_arg(shutil.which(gcovr_exe))))
-        return gcovr_exe, mesonlib.version_compare(found, '>=' + new_rootdir_version)
+        return gcovr_exe, found
     return None, None
 
 def detect_llvm_cov():
@@ -107,7 +104,7 @@ def detect_llvm_cov():
     return None
 
 def find_coverage_tools() -> T.Tuple[T.Optional[str], T.Optional[str], T.Optional[str], T.Optional[str], T.Optional[str]]:
-    gcovr_exe, gcovr_new_rootdir = detect_gcovr()
+    gcovr_exe, gcovr_version = detect_gcovr()
 
     llvm_cov_exe = detect_llvm_cov()
 
@@ -119,7 +116,7 @@ def find_coverage_tools() -> T.Tuple[T.Optional[str], T.Optional[str], T.Optiona
     if not mesonlib.exe_exists([genhtml_exe, '--version']):
         genhtml_exe = None
 
-    return gcovr_exe, gcovr_new_rootdir, lcov_exe, genhtml_exe, llvm_cov_exe
+    return gcovr_exe, gcovr_version, lcov_exe, genhtml_exe, llvm_cov_exe
 
 def detect_ninja(version: str = '1.8.2', log: bool = False) -> T.List[str]:
     r = detect_ninja_command_and_version(version, log)
@@ -160,6 +157,8 @@ def get_llvm_tool_names(tool: str) -> T.List[str]:
     # unless it becomes a stable release.
     suffixes = [
         '', # base (no suffix)
+        '-14',  '14',
+        '-13',  '13',
         '-12',  '12',
         '-11',  '11',
         '-10',  '10',
@@ -174,7 +173,7 @@ def get_llvm_tool_names(tool: str) -> T.List[str]:
         '-3.7', '37',
         '-3.6', '36',
         '-3.5', '35',
-        '-13',    # Debian development snapshot
+        '-15',    # Debian development snapshot
         '-devel', # FreeBSD development snapshot
     ]
     names = []
@@ -546,7 +545,6 @@ class Environment:
                     self.options[key.as_build()] = value
             self._load_machine_file_options(config, properties.host, MachineChoice.HOST)
 
-
         ## "freeze" now initialized configuration, and "save" to the class.
 
         self.machines = machines.default_missing()
@@ -658,7 +656,7 @@ class Environment:
                         _p_env = re.split(r':|;', p_env)
                     p_list = list(mesonlib.OrderedSet(_p_env))
                 elif keyname == 'pkg_config_path':
-                    p_list = list(mesonlib.OrderedSet(p_env.split(':')))
+                    p_list = list(mesonlib.OrderedSet(p_env.split(os.pathsep)))
                 else:
                     p_list = split_args(p_env)
                 p_list = [e for e in p_list if e]  # filter out any empty elements
@@ -689,11 +687,11 @@ class Environment:
                             # time) until we're instantiating that `Compiler`
                             # object. This is required so that passing
                             # `-Dc_args=` on the command line and `$CFLAGS`
-                            # have subtely differen behavior. `$CFLAGS` will be
+                            # have subtely different behavior. `$CFLAGS` will be
                             # added to the linker command line if the compiler
                             # acts as a linker driver, `-Dc_args` will not.
                             #
-                            # We stil use the original key as the base here, as
+                            # We still use the original key as the base here, as
                             # we want to inhert the machine and the compiler
                             # language
                             key = key.evolve('env_args')
@@ -815,6 +813,10 @@ class Environment:
         if m.is_windows() or m.is_cygwin():
             return self.get_bindir()
         return self.get_libdir()
+
+    def get_jar_dir(self) -> str:
+        """Install dir for JAR files"""
+        return f"{self.get_datadir()}/java"
 
     def get_static_lib_dir(self) -> str:
         "Install dir for the static library"

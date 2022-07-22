@@ -28,26 +28,32 @@ __all__ = [
     'CustomTargetIndexHolder',
     'MachineHolder',
     'Test',
-    'ConfigurationDataObject',
+    'ConfigurationDataHolder',
     'SubprojectHolder',
     'DependencyHolder',
     'GeneratedListHolder',
     'ExternalProgramHolder',
     'extract_required_kwarg',
 
+    'ArrayHolder',
     'BooleanHolder',
+    'DictHolder',
     'IntegerHolder',
+    'StringHolder',
 ]
 
 from .interpreter import Interpreter, permitted_dependency_kwargs
 from .compiler import CompilerHolder
 from .interpreterobjects import (ExecutableHolder, BuildTargetHolder, CustomTargetHolder,
                                  CustomTargetIndexHolder, MachineHolder, Test,
-                                 ConfigurationDataObject, SubprojectHolder, DependencyHolder,
+                                 ConfigurationDataHolder, SubprojectHolder, DependencyHolder,
                                  GeneratedListHolder, ExternalProgramHolder,
                                  extract_required_kwarg)
 
 from .primitives import (
+    ArrayHolder,
     BooleanHolder,
+    DictHolder,
     IntegerHolder,
+    StringHolder,
 )

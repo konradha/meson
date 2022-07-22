@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import os
 import os.path
@@ -19,26 +20,30 @@ import subprocess
 import textwrap
 import typing as T
 
-from ..mesonlib import EnvironmentException, MachineChoice
+from ..mesonlib import EnvironmentException
 from .compilers import Compiler, java_buildtype_args
 from .mixins.islinker import BasicLinkerIsCompilerMixin
 
 if T.TYPE_CHECKING:
     from ..envconfig import MachineInfo
     from ..environment import Environment
+    from ..mesonlib import MachineChoice
 
 class JavaCompiler(BasicLinkerIsCompilerMixin, Compiler):
 
     language = 'java'
+    id = 'unknown'
 
     def __init__(self, exelist: T.List[str], version: str, for_machine: MachineChoice,
                  info: 'MachineInfo', full_version: T.Optional[str] = None):
         super().__init__(exelist, version, for_machine, info, full_version=full_version)
-        self.id = 'unknown'
         self.javarunner = 'java'
 
     def get_werror_args(self) -> T.List[str]:
         return ['-Werror']
+
+    def get_no_warn_args(self) -> T.List[str]:
+        return ['-nowarn']
 
     def get_output_args(self, outputname: str) -> T.List[str]:
         if outputname == '':
@@ -103,3 +108,8 @@ class JavaCompiler(BasicLinkerIsCompilerMixin, Compiler):
 
     def get_optimization_args(self, optimization_level: str) -> T.List[str]:
         return []
+
+    def get_debug_args(self, is_debug: bool) -> T.List[str]:
+        if is_debug:
+            return ['-g']
+        return ['-g:none']

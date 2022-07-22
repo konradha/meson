@@ -1,5 +1,6 @@
 # Copyright 2021 The Meson development team
 # SPDX-license-identifier: Apache-2.0
+from __future__ import annotations
 
 from ...interpreterbase import (
     ObjectHolder,
@@ -7,9 +8,6 @@ from ...interpreterbase import (
     typed_operator,
     noKwargs,
     noPosargs,
-
-    TYPE_var,
-    TYPE_kwargs,
 
     InvalidArguments
 )
@@ -19,6 +17,7 @@ import typing as T
 if T.TYPE_CHECKING:
     # Object holders need the actual interpreter
     from ...interpreter import Interpreter
+    from ...interpreterbase import TYPE_var, TYPE_kwargs
 
 class IntegerHolder(ObjectHolder[int]):
     def __init__(self, obj: int, interpreter: 'Interpreter') -> None:
@@ -28,7 +27,6 @@ class IntegerHolder(ObjectHolder[int]):
             'is_odd': self.is_odd_method,
             'to_string': self.to_string_method,
         })
-
 
         self.trivial_operators.update({
             # Arithmetic
@@ -81,4 +79,3 @@ class IntegerHolder(ObjectHolder[int]):
         if other == 0:
             raise InvalidArguments('Tried to divide by 0')
         return self.held_object % other
-

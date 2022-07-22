@@ -13,10 +13,14 @@ if ($env:arch -eq 'x64') {
 } elseif ($env:arch -eq 'x86') {
     # Switch to the x86 Rust toolchain
     rustup default stable-i686-pc-windows-msvc
+
+    # Also install clippy
+    rustup component add clippy
+
     # Rust puts its shared stdlib in a secret place, but it is needed to run tests.
     $env:Path += ";$HOME/.rustup/toolchains/stable-i686-pc-windows-msvc/bin"
     # Need 32-bit Python for tests that need the Python dependency
-    $env:Path = "C:\hostedtoolcache\windows\Python\3.6.8\x86;C:\hostedtoolcache\windows\Python\3.6.8\x86\Scripts;$env:Path"
+    $env:Path = "C:\hostedtoolcache\windows\Python\3.7.9\x86;C:\hostedtoolcache\windows\Python\3.7.9\x86\Scripts;$env:Path"
 }
 
 # Set the CI env var for the meson test framework
@@ -50,18 +54,26 @@ echo "Extracting ci_data.zip"
 Expand-Archive $env:AGENT_WORKFOLDER\ci_data.zip -DestinationPath $env:AGENT_WORKFOLDER\ci_data
 & "$env:AGENT_WORKFOLDER\ci_data\install.ps1" -Arch $env:arch -Compiler $env:compiler -Boost $true -DMD $dmd
 
+if ($env:arch -eq 'x64') {
+    DownloadFile -Source https://downloads.python.org/pypy/pypy3.8-v7.3.9-win64.zip -Destination $env:AGENT_WORKFOLDER\pypy38.zip
+    Expand-Archive $env:AGENT_WORKFOLDER\pypy38.zip -DestinationPath $env:AGENT_WORKFOLDER\pypy38
+    $ENV:Path = $ENV:Path + ";$ENV:AGENT_WORKFOLDER\pypy38\pypy3.8-v7.3.9-win64;$ENV:AGENT_WORKFOLDER\pypy38\pypy3.8-v7.3.9-win64\Scripts"
+    pypy3 -m ensurepip
+}
+
 
 echo "=== PATH BEGIN ==="
 echo ($env:Path).Replace(';',"`n")
 echo "=== PATH END ==="
 echo ""
 
-$progs = @("python","ninja","pkg-config","cl","rc","link")
+$progs = @("python","ninja","pkg-config","cl","rc","link","pypy3","ifort")
 foreach ($prog in $progs) {
   echo ""
   echo "Locating ${prog}:"
   where.exe $prog
 }
+
 
 echo ""
 echo "Ninja / MSBuld version:"
@@ -77,7 +89,7 @@ python --version
 
 # Needed for running unit tests in parallel.
 echo ""
-python -m pip --disable-pip-version-check install --upgrade pefile pytest-xdist jsonschema coverage
+python -m pip --disable-pip-version-check install --upgrade pefile pytest-xdist pytest-subtests jsonschema coverage
 
 echo ""
 echo "=== Start running tests ==="
@@ -98,7 +110,7 @@ python3 -m coverage xml
 python3 -m coverage report
 
 # Currently codecov.py does not handle Azure, use this fork of a fork to get it
-# working without requireing a token
+# working without requiring a token
 git clone https://github.com/mensinda/codecov-python
 python3 -m pip install --ignore-installed ./codecov-python
 python3 -m codecov -f .coverage/coverage.xml -n "VS$env:compiler $env:arch $env:backend" -c $env:SOURCE_VERSION

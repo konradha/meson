@@ -1,4 +1,4 @@
-# Copyright 2012-2017 The Meson development team
+# Copyright 2012-2022 The Meson development team
 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -59,7 +59,7 @@ class StaticLinker:
     def get_exelist(self) -> T.List[str]:
         return self.exelist.copy()
 
-    def get_std_link_args(self) -> T.List[str]:
+    def get_std_link_args(self, env: 'Environment', is_thin: bool) -> T.List[str]:
         return []
 
     def get_buildtype_linker_args(self, buildtype: str) -> T.List[str]:
@@ -72,7 +72,7 @@ class StaticLinker:
         return []
 
     def build_rpath_args(self, env: 'Environment', build_dir: str, from_dir: str,
-                         rpath_paths: str, build_rpath: str,
+                         rpath_paths: T.Tuple[str, ...], build_rpath: str,
                          install_rpath: str) -> T.Tuple[T.List[str], T.Set[bytes]]:
         return ([], set())
 
@@ -113,7 +113,7 @@ class StaticLinker:
         be implemented
         """
         assert not self.can_linker_accept_rsp(), f'{self.id} linker accepts RSP, but doesn\' provide a supported format, this is a bug'
-        raise EnvironmentException(f'{self.id} does not implemnt rsp format, this shouldn\'t be called')
+        raise EnvironmentException(f'{self.id} does not implement rsp format, this shouldn\'t be called')
 
 
 class VisualStudioLikeLinker:
@@ -167,23 +167,16 @@ class IntelVisualStudioLinker(VisualStudioLikeLinker, StaticLinker):
         VisualStudioLikeLinker.__init__(self, machine)
 
 
-class ArLinker(StaticLinker):
-
-    def __init__(self, exelist: T.List[str]):
-        super().__init__(exelist)
-        self.id = 'ar'
-        pc, stdo = mesonlib.Popen_safe(self.exelist + ['-h'])[0:2]
-        # Enable deterministic builds if they are available.
-        if '[D]' in stdo:
-            self.std_args = ['csrD']
-        else:
-            self.std_args = ['csr']
-        self.can_rsp = '@<' in stdo
+class ArLikeLinker(StaticLinker):
+    # POSIX requires supporting the dash, GNU permits omitting it
+    std_args = ['-csr']
 
     def can_linker_accept_rsp(self) -> bool:
-        return self.can_rsp
+        # armar / AIX can't accept arguments using the @rsp syntax
+        # in fact, only the 'ar' id can
+        return False
 
-    def get_std_link_args(self) -> T.List[str]:
+    def get_std_link_args(self, env: 'Environment', is_thin: bool) -> T.List[str]:
         return self.std_args
 
     def get_output_args(self, target: str) -> T.List[str]:
@@ -193,16 +186,37 @@ class ArLinker(StaticLinker):
         return RSPFileSyntax.GCC
 
 
-class ArmarLinker(ArLinker):  # lgtm [py/missing-call-to-init]
+class ArLinker(ArLikeLinker):
+    id = 'ar'
 
-    def __init__(self, exelist: T.List[str]):
-        StaticLinker.__init__(self, exelist)
-        self.id = 'armar'
-        self.std_args = ['-csr']
+    def __init__(self, for_machine: mesonlib.MachineChoice, exelist: T.List[str]):
+        super().__init__(exelist)
+        stdo = mesonlib.Popen_safe(self.exelist + ['-h'])[1]
+        # Enable deterministic builds if they are available.
+        stdargs = 'csr'
+        thinargs = ''
+        if '[D]' in stdo:
+            stdargs += 'D'
+        if '[T]' in stdo:
+            thinargs = 'T'
+        self.std_args = [stdargs]
+        self.std_thin_args = [stdargs + thinargs]
+        self.can_rsp = '@<' in stdo
+        self.for_machine = for_machine
 
     def can_linker_accept_rsp(self) -> bool:
-        # armar can't accept arguments using the @rsp syntax
-        return False
+        return self.can_rsp
+
+    def get_std_link_args(self, env: 'Environment', is_thin: bool) -> T.List[str]:
+        # FIXME: osx ld rejects this: "file built for unknown-unsupported file format"
+        if is_thin and not env.machines[self.for_machine].is_darwin():
+            return self.std_thin_args
+        else:
+            return self.std_args
+
+
+class ArmarLinker(ArLikeLinker):
+    id = 'armar'
 
 
 class DLinker(StaticLinker):
@@ -212,7 +226,7 @@ class DLinker(StaticLinker):
         self.arch = arch
         self.__rsp_syntax = rsp_syntax
 
-    def get_std_link_args(self) -> T.List[str]:
+    def get_std_link_args(self, env: 'Environment', is_thin: bool) -> T.List[str]:
         return ['-lib']
 
     def get_output_args(self, target: str) -> T.List[str]:
@@ -275,11 +289,11 @@ class CompCertLinker(StaticLinker):
         return [f'-o{target}']
 
 
-class C2000Linker(StaticLinker):
+class TILinker(StaticLinker):
 
     def __init__(self, exelist: T.List[str]):
         super().__init__(exelist)
-        self.id = 'ar2000'
+        self.id = 'ti-ar'
 
     def can_linker_accept_rsp(self) -> bool:
         return False
@@ -291,19 +305,17 @@ class C2000Linker(StaticLinker):
         return ['-r']
 
 
-class AIXArLinker(ArLinker):
-
-    def __init__(self, exelist: T.List[str]):
-        StaticLinker.__init__(self, exelist)
-        self.id = 'aixar'
-        self.std_args = ['-csr', '-Xany']
-
-    def can_linker_accept_rsp(self) -> bool:
-        # AIXAr can't accept arguments using the @rsp syntax
-        return False
+class C2000Linker(TILinker):
+    # Required for backwards compat with projects created before ti-cgt support existed
+    id = 'ar2000'
 
 
-def prepare_rpaths(raw_rpaths: str, build_dir: str, from_dir: str) -> T.List[str]:
+class AIXArLinker(ArLikeLinker):
+    id = 'aixar'
+    std_args = ['-csr', '-Xany']
+
+
+def prepare_rpaths(raw_rpaths: T.Tuple[str, ...], build_dir: str, from_dir: str) -> T.List[str]:
     # The rpaths we write must be relative if they point to the build dir,
     # because otherwise they have different length depending on the build
     # directory. This breaks reproducible builds.
@@ -512,7 +524,7 @@ class DynamicLinker(metaclass=abc.ABCMeta):
         raise MesonException('This linker does not support bitcode bundles')
 
     def build_rpath_args(self, env: 'Environment', build_dir: str, from_dir: str,
-                         rpath_paths: str, build_rpath: str,
+                         rpath_paths: T.Tuple[str, ...], build_rpath: str,
                          install_rpath: str) -> T.Tuple[T.List[str], T.Set[bytes]]:
         return ([], set())
 
@@ -621,7 +633,7 @@ class GnuLikeDynamicLinkerMixin:
         return self._apply_prefix(f'-soname,{prefix}{shlib_name}.{suffix}{sostr}')
 
     def build_rpath_args(self, env: 'Environment', build_dir: str, from_dir: str,
-                         rpath_paths: str, build_rpath: str,
+                         rpath_paths: T.Tuple[str, ...], build_rpath: str,
                          install_rpath: str) -> T.Tuple[T.List[str], T.Set[bytes]]:
         m = env.machines[self.for_machine]
         if m.is_windows() or m.is_cygwin():
@@ -689,14 +701,32 @@ class GnuLikeDynamicLinkerMixin:
         return (args, rpath_dirs_to_remove)
 
     def get_win_subsystem_args(self, value: str) -> T.List[str]:
-        if 'windows' in value:
-            args = ['--subsystem,windows']
-        elif 'console' in value:
-            args = ['--subsystem,console']
-        else:
-            raise MesonException(f'Only "windows" and "console" are supported for win_subsystem with MinGW, not "{value}".')
+        # MinGW only directly supports a couple of the possible
+        # PE application types. The raw integer works as an argument
+        # as well, and is always accepted, so we manually map the
+        # other types here. List of all types:
+        # https://github.com/wine-mirror/wine/blob/3ded60bd1654dc689d24a23305f4a93acce3a6f2/include/winnt.h#L2492-L2507
+        subsystems = {
+            "native": "1",
+            "windows": "windows",
+            "console": "console",
+            "posix": "7",
+            "efi_application": "10",
+            "efi_boot_service_driver": "11",
+            "efi_runtime_driver": "12",
+            "efi_rom": "13",
+            "boot_application": "16",
+        }
+        versionsuffix = None
         if ',' in value:
-            args[-1] = args[-1] + ':' + value.split(',')[1]
+            value, versionsuffix = value.split(',', 1)
+        newvalue = subsystems.get(value)
+        if newvalue is not None:
+            if versionsuffix is not None:
+                newvalue += f':{versionsuffix}'
+            args = [f'--subsystem,{newvalue}']
+        else:
+            raise mesonlib.MesonBugException(f'win_subsystem: {value!r} not handled in MinGW linker. This should not be possible.')
 
         return self._apply_prefix(args)
 
@@ -759,7 +789,7 @@ class AppleDynamicLinker(PosixDynamicLinkerMixin, DynamicLinker):
         return args
 
     def build_rpath_args(self, env: 'Environment', build_dir: str, from_dir: str,
-                         rpath_paths: str, build_rpath: str,
+                         rpath_paths: T.Tuple[str, ...], build_rpath: str,
                          install_rpath: str) -> T.Tuple[T.List[str], T.Set[bytes]]:
         if not rpath_paths and not install_rpath and not build_rpath:
             return ([], set())
@@ -795,6 +825,11 @@ class GnuBFDDynamicLinker(GnuDynamicLinker):
     id = 'ld.bfd'
 
 
+class MoldDynamicLinker(GnuDynamicLinker):
+
+    id = 'ld.mold'
+
+
 class LLVMDynamicLinker(GnuLikeDynamicLinkerMixin, PosixDynamicLinkerMixin, DynamicLinker):
 
     """Representation of LLVM's ld.lld linker.
@@ -812,7 +847,8 @@ class LLVMDynamicLinker(GnuLikeDynamicLinkerMixin, PosixDynamicLinkerMixin, Dyna
 
         # Some targets don't seem to support this argument (windows, wasm, ...)
         _, _, e = mesonlib.Popen_safe(self.exelist + self._apply_prefix('--allow-shlib-undefined'))
-        self.has_allow_shlib_undefined = 'unknown argument: --allow-shlib-undefined' not in e
+        # Versions < 9 do not have a quoted argument
+        self.has_allow_shlib_undefined = ('unknown argument: --allow-shlib-undefined' not in e) and ("unknown argument: '--allow-shlib-undefined'" not in e)
 
     def get_allow_undefined_args(self) -> T.List[str]:
         if self.has_allow_shlib_undefined:
@@ -840,7 +876,7 @@ class WASMDynamicLinker(GnuLikeDynamicLinkerMixin, PosixDynamicLinkerMixin, Dyna
         return []
 
     def build_rpath_args(self, env: 'Environment', build_dir: str, from_dir: str,
-                         rpath_paths: str, build_rpath: str,
+                         rpath_paths: T.Tuple[str, ...], build_rpath: str,
                          install_rpath: str) -> T.Tuple[T.List[str], T.Set[bytes]]:
         return ([], set())
 
@@ -887,7 +923,7 @@ class Xc16DynamicLinker(DynamicLinker):
 
     def __init__(self, for_machine: mesonlib.MachineChoice,
                  *, version: str = 'unknown version'):
-        super().__init__(['xc16-gcc.exe'], for_machine, '', [],
+        super().__init__(['xc16-gcc'], for_machine, '', [],
                          version=version)
 
     def get_link_whole_for(self, args: T.List[str]) -> T.List[str]:
@@ -908,7 +944,7 @@ class Xc16DynamicLinker(DynamicLinker):
         return [f'-o{outputname}']
 
     def get_search_args(self, dirname: str) -> 'T.NoReturn':
-        raise OSError('xc16-gcc.exe does not have a search dir argument')
+        raise OSError('xc16-gcc does not have a search dir argument')
 
     def get_allow_undefined_args(self) -> T.List[str]:
         return []
@@ -918,7 +954,7 @@ class Xc16DynamicLinker(DynamicLinker):
         return []
 
     def build_rpath_args(self, env: 'Environment', build_dir: str, from_dir: str,
-                         rpath_paths: str, build_rpath: str,
+                         rpath_paths: T.Tuple[str, ...], build_rpath: str,
                          install_rpath: str) -> T.Tuple[T.List[str], T.Set[bytes]]:
         return ([], set())
 
@@ -961,19 +997,19 @@ class CompCertDynamicLinker(DynamicLinker):
         raise MesonException(f'{self.id} does not support shared libraries.')
 
     def build_rpath_args(self, env: 'Environment', build_dir: str, from_dir: str,
-                         rpath_paths: str, build_rpath: str,
+                         rpath_paths: T.Tuple[str, ...], build_rpath: str,
                          install_rpath: str) -> T.Tuple[T.List[str], T.Set[bytes]]:
         return ([], set())
 
-class C2000DynamicLinker(DynamicLinker):
+class TIDynamicLinker(DynamicLinker):
 
-    """Linker for Texas Instruments C2000 compiler."""
+    """Linker for Texas Instruments compiler family."""
 
-    id = 'cl2000'
+    id = 'ti'
 
     def __init__(self, exelist: T.List[str], for_machine: mesonlib.MachineChoice,
                  *, version: str = 'unknown version'):
-        super().__init__(exelist or ['cl2000.exe'], for_machine, '', [],
+        super().__init__(exelist, for_machine, '', [],
                          version=version)
 
     def get_link_whole_for(self, args: T.List[str]) -> T.List[str]:
@@ -994,13 +1030,18 @@ class C2000DynamicLinker(DynamicLinker):
         return ['-z', f'--output_file={outputname}']
 
     def get_search_args(self, dirname: str) -> 'T.NoReturn':
-        raise OSError('cl2000.exe does not have a search dir argument')
+        raise OSError('TI compilers do not have a search dir argument')
 
     def get_allow_undefined_args(self) -> T.List[str]:
         return []
 
     def get_always_args(self) -> T.List[str]:
         return []
+
+
+class C2000DynamicLinker(TIDynamicLinker):
+    # Required for backwards compat with projects created before ti-cgt support existed
+    id = 'cl2000'
 
 
 class ArmDynamicLinker(PosixDynamicLinkerMixin, DynamicLinker):
@@ -1059,7 +1100,7 @@ class NAGDynamicLinker(PosixDynamicLinkerMixin, DynamicLinker):
     id = 'nag'
 
     def build_rpath_args(self, env: 'Environment', build_dir: str, from_dir: str,
-                         rpath_paths: str, build_rpath: str,
+                         rpath_paths: T.Tuple[str, ...], build_rpath: str,
                          install_rpath: str) -> T.Tuple[T.List[str], T.Set[bytes]]:
         if not rpath_paths and not install_rpath and not build_rpath:
             return ([], set())
@@ -1104,7 +1145,7 @@ class PGIDynamicLinker(PosixDynamicLinkerMixin, DynamicLinker):
         return []
 
     def build_rpath_args(self, env: 'Environment', build_dir: str, from_dir: str,
-                         rpath_paths: str, build_rpath: str,
+                         rpath_paths: T.Tuple[str, ...], build_rpath: str,
                          install_rpath: str) -> T.Tuple[T.List[str], T.Set[bytes]]:
         if not env.machines[self.for_machine].is_windows():
             return (['-R' + os.path.join(build_dir, p) for p in rpath_paths], set())
@@ -1119,7 +1160,7 @@ class PGIStaticLinker(StaticLinker):
         self.id = 'ar'
         self.std_args = ['-r']
 
-    def get_std_link_args(self) -> T.List[str]:
+    def get_std_link_args(self, env: 'Environment', is_thin: bool) -> T.List[str]:
         return self.std_args
 
     def get_output_args(self, target: str) -> T.List[str]:
@@ -1166,7 +1207,7 @@ class VisualStudioLikeLinkerMixin:
 
     def get_always_args(self) -> T.List[str]:
         parent = super().get_always_args() # type: ignore
-        return self._apply_prefix('/nologo') + T.cast(T.List[str], parent)
+        return self._apply_prefix('/nologo') + T.cast('T.List[str]', parent)
 
     def get_search_args(self, dirname: str) -> T.List[str]:
         return self._apply_prefix('/LIBPATH:' + dirname)
@@ -1311,7 +1352,7 @@ class SolarisDynamicLinker(PosixDynamicLinkerMixin, DynamicLinker):
         return ['-z', 'fatal-warnings']
 
     def build_rpath_args(self, env: 'Environment', build_dir: str, from_dir: str,
-                         rpath_paths: str, build_rpath: str,
+                         rpath_paths: T.Tuple[str, ...], build_rpath: str,
                          install_rpath: str) -> T.Tuple[T.List[str], T.Set[bytes]]:
         if not rpath_paths and not install_rpath and not build_rpath:
             return ([], set())
@@ -1358,7 +1399,7 @@ class AIXDynamicLinker(PosixDynamicLinkerMixin, DynamicLinker):
         return self._apply_prefix(['-berok'])
 
     def build_rpath_args(self, env: 'Environment', build_dir: str, from_dir: str,
-                         rpath_paths: str, build_rpath: str,
+                         rpath_paths: T.Tuple[str, ...], build_rpath: str,
                          install_rpath: str) -> T.Tuple[T.List[str], T.Set[bytes]]:
         all_paths = mesonlib.OrderedSet() # type: mesonlib.OrderedSet[str]
         # install_rpath first, followed by other paths, and the system path last
@@ -1374,7 +1415,7 @@ class AIXDynamicLinker(PosixDynamicLinkerMixin, DynamicLinker):
         if len(sys_path) == 0:
             # get_compiler_system_dirs doesn't support our compiler.
             # Use the default system library path
-            all_paths.update(['/usr/lib','/lib'])
+            all_paths.update(['/usr/lib', '/lib'])
         else:
             # Include the compiler's default library paths, but filter out paths that don't exist
             for p in sys_path:

@@ -16,8 +16,7 @@ __all__ = [
     'InterpreterObject',
     'MesonInterpreterObject',
     'ObjectHolder',
-    'RangeHolder',
-    'MesonVersionString',
+    'IterableObject',
     'MutableInterpreterObject',
 
     'MesonOperator',
@@ -32,7 +31,6 @@ __all__ = [
     'ContinueRequest',
     'BreakRequest',
 
-    'check_stringlist',
     'default_resolve_key',
     'flatten',
     'resolve_second_level_holders',
@@ -59,6 +57,8 @@ __all__ = [
 
     'InterpreterBase',
 
+    'SubProject',
+
     'TV_fw_var',
     'TV_fw_args',
     'TV_fw_kwargs',
@@ -78,7 +78,7 @@ from .baseobjects import (
     InterpreterObject,
     MesonInterpreterObject,
     ObjectHolder,
-    RangeHolder,
+    IterableObject,
     MutableInterpreterObject,
 
     TV_fw_var,
@@ -92,6 +92,8 @@ from .baseobjects import (
     TYPE_nkwargs,
     TYPE_key_resolver,
     TYPE_HoldableTypes,
+
+    SubProject,
 
     HoldableTypes,
 )
@@ -128,6 +130,6 @@ from .exceptions import (
 )
 
 from .disabler import Disabler, is_disabled
-from .helpers import check_stringlist, default_resolve_key, flatten, resolve_second_level_holders
-from .interpreterbase import MesonVersionString, InterpreterBase
+from .helpers import default_resolve_key, flatten, resolve_second_level_holders
+from .interpreterbase import InterpreterBase
 from .operator import MesonOperator

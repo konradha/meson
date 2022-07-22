@@ -10,7 +10,7 @@ from ..mesonlib import EnvironmentException, OptionKey
 from .compilers import Compiler
 
 if T.TYPE_CHECKING:
-    from ..coredata import KeyedOptionDictType
+    from ..coredata import MutableKeyedOptionDictType, KeyedOptionDictType
     from ..environment import Environment
 
 
@@ -61,13 +61,18 @@ class CythonCompiler(Compiler):
 
         return new
 
-    def get_options(self) -> 'KeyedOptionDictType':
+    def get_options(self) -> 'MutableKeyedOptionDictType':
         opts = super().get_options()
         opts.update({
             OptionKey('version', machine=self.for_machine, lang=self.language): coredata.UserComboOption(
                 'Python version to target',
                 ['2', '3'],
                 '3',
+            ),
+            OptionKey('language', machine=self.for_machine, lang=self.language): coredata.UserComboOption(
+                'Output C or C++ files',
+                ['c', 'cpp'],
+                'c',
             )
         })
         return opts
@@ -76,4 +81,7 @@ class CythonCompiler(Compiler):
         args: T.List[str] = []
         key = options[OptionKey('version', machine=self.for_machine, lang=self.language)]
         args.append(f'-{key.value}')
+        lang = options[OptionKey('language', machine=self.for_machine, lang=self.language)]
+        if lang.value == 'cpp':
+            args.append('--cplus')
         return args

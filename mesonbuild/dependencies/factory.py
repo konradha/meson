@@ -12,13 +12,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import functools
 import typing as T
 
-from ..mesonlib import MachineChoice
 from .base import DependencyException, DependencyMethods
-from .base import ExternalDependency
 from .base import process_method_kw
 from .base import BuiltinDependency, SystemDependency
 from .cmake import CMakeDependency
@@ -26,8 +25,10 @@ from .framework import ExtraFrameworkDependency
 from .pkgconfig import PkgConfigDependency
 
 if T.TYPE_CHECKING:
-    from ..environment import Environment
+    from .base import ExternalDependency
     from .configtool import ConfigToolDependency
+    from ..environment import Environment
+    from ..mesonlib import MachineChoice
 
     DependencyGenerator = T.Callable[[], ExternalDependency]
     FactoryFunc = T.Callable[
@@ -49,6 +50,10 @@ if T.TYPE_CHECKING:
         T.List[DependencyGenerator]
     ]
 
+    # This should be str, Environment, T.Dict[str, T.Any], T.Optional[str]
+    # But if you try that, you get error: Cannot infer type of lambda
+    CmakeDependencyFunc = T.Callable[..., CMakeDependency]
+
 class DependencyFactory:
 
     """Factory to get dependencies from multiple sources.
@@ -63,7 +68,7 @@ class DependencyFactory:
     :methods: An ordered list of DependencyMethods. This is the order
         dependencies will be returned in unless they are removed by the
         _process_method function
-    :*_name: This will overwrite the name passed to the coresponding class.
+    :*_name: This will overwrite the name passed to the corresponding class.
         For example, if the name is 'zlib', but cmake calls the dependency
         'Z', then using `cmake_name='Z'` will pass the name as 'Z' to cmake.
     :*_class: A *type* or callable that creates a class, and has the
@@ -77,7 +82,7 @@ class DependencyFactory:
                  pkgconfig_name: T.Optional[str] = None,
                  pkgconfig_class: 'T.Type[PkgConfigDependency]' = PkgConfigDependency,
                  cmake_name: T.Optional[str] = None,
-                 cmake_class: 'T.Type[CMakeDependency]' = CMakeDependency,
+                 cmake_class: 'T.Union[T.Type[CMakeDependency], CmakeDependencyFunc]' = CMakeDependency,
                  configtool_class: 'T.Optional[T.Type[ConfigToolDependency]]' = None,
                  framework_name: T.Optional[str] = None,
                  framework_class: 'T.Type[ExtraFrameworkDependency]' = ExtraFrameworkDependency,

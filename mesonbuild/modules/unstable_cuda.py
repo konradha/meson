@@ -11,12 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import typing as T
 import re
 
 from ..mesonlib import version_compare
-from ..compilers import CudaCompiler, Compiler
+from ..compilers import CudaCompiler
 
 from . import NewExtensionModule
 
@@ -27,6 +28,7 @@ from ..interpreterbase import (
 
 if T.TYPE_CHECKING:
     from . import ModuleState
+    from ..compilers import Compiler
 
 class CudaModule(NewExtensionModule):
 
@@ -53,6 +55,13 @@ class CudaModule(NewExtensionModule):
 
         cuda_version = args[0]
         driver_version_table = [
+            {'cuda_version': '>=11.7.0',   'windows': '516.01', 'linux': '515.43.04'},
+            {'cuda_version': '>=11.6.1',   'windows': '511.65', 'linux': '510.47.03'},
+            {'cuda_version': '>=11.6.0',   'windows': '511.23', 'linux': '510.39.01'},
+            {'cuda_version': '>=11.5.1',   'windows': '496.13', 'linux': '495.29.05'},
+            {'cuda_version': '>=11.5.0',   'windows': '496.04', 'linux': '495.29.05'},
+            {'cuda_version': '>=11.4.3',   'windows': '472.50', 'linux': '470.82.01'},
+            {'cuda_version': '>=11.4.1',   'windows': '471.41', 'linux': '470.57.02'},
             {'cuda_version': '>=11.4.0',   'windows': '471.11', 'linux': '470.42.01'},
             {'cuda_version': '>=11.3.0',   'windows': '465.89', 'linux': '465.19.01'},
             {'cuda_version': '>=11.2.2',   'windows': '461.33', 'linux': '460.32.03'},
@@ -264,7 +273,7 @@ class CudaModule(NewExtensionModule):
         elif isinstance(cuda_arch_list, str):
             cuda_arch_list = self._break_arch_string(cuda_arch_list)
 
-        cuda_arch_list = sorted([x for x in set(cuda_arch_list) if x])
+        cuda_arch_list = sorted(x for x in set(cuda_arch_list) if x)
 
         cuda_arch_bin = []
         cuda_arch_ptx = []
@@ -294,8 +303,7 @@ class CudaModule(NewExtensionModule):
                 }.get(arch_name, (None, None))
 
             if arch_bin is None:
-                raise InvalidArguments('Unknown CUDA Architecture Name {}!'
-                                       .format(arch_name))
+                raise InvalidArguments(f'Unknown CUDA Architecture Name {arch_name}!')
 
             cuda_arch_bin += arch_bin
 

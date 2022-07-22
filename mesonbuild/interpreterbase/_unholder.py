@@ -11,21 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-from .baseobjects import InterpreterObject, MesonInterpreterObject, ObjectHolder, TYPE_var, HoldableTypes
-from .exceptions import InvalidArguments
-from ..mesonlib import HoldableObject, MesonBugException
+from __future__ import annotations
 
 import typing as T
 
-def _unholder(obj: T.Union[TYPE_var, InterpreterObject]) -> TYPE_var:
-    if isinstance(obj, str):
-        return obj
-    elif isinstance(obj, list):
-        return [_unholder(x) for x in obj]
-    elif isinstance(obj, dict):
-        return {k: _unholder(v) for k, v in obj.items()}
-    elif isinstance(obj, ObjectHolder):
+from .baseobjects import InterpreterObject, MesonInterpreterObject, ObjectHolder, HoldableTypes
+from .exceptions import InvalidArguments
+from ..mesonlib import HoldableObject, MesonBugException
+
+if T.TYPE_CHECKING:
+    from .baseobjects import TYPE_var
+
+def _unholder(obj: InterpreterObject) -> TYPE_var:
+    if isinstance(obj, ObjectHolder):
         assert isinstance(obj.held_object, HoldableTypes)
         return obj.held_object
     elif isinstance(obj, MesonInterpreterObject):

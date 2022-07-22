@@ -26,6 +26,7 @@ from ... import mlog
 
 if T.TYPE_CHECKING:
     from ...environment import Environment
+    from ...dependencies import Dependency
     from .clike import CLikeCompiler as Compiler
 else:
     # This is a bit clever, for mypy we pretend that these mixins descend from
@@ -146,7 +147,7 @@ class VisualStudioLikeCompiler(Compiler, metaclass=abc.ABCMeta):
         return pchname
 
     def get_pch_base_name(self, header: str) -> str:
-        # This needs to be implemented by inherting classes
+        # This needs to be implemented by inheriting classes
         raise NotImplementedError
 
     def get_pch_use_args(self, pch_dir: str, header: str) -> T.List[str]:
@@ -161,7 +162,7 @@ class VisualStudioLikeCompiler(Compiler, metaclass=abc.ABCMeta):
         return ['/c']
 
     def get_no_optimization_args(self) -> T.List[str]:
-        return ['/Od','/Oi-']
+        return ['/Od', '/Oi-']
 
     def sanitizer_compile_args(self, value: str) -> T.List[str]:
         if value == 'none':
@@ -332,6 +333,8 @@ class VisualStudioLikeCompiler(Compiler, metaclass=abc.ABCMeta):
             return '14.1' # (Visual Studio 2017)
         elif version < 1930:
             return '14.2' # (Visual Studio 2019)
+        elif version < 1940:
+            return '14.3' # (Visual Studio 2022)
         mlog.warning(f'Could not find toolset for version {self.version!r}')
         return None
 
@@ -380,14 +383,29 @@ class VisualStudioLikeCompiler(Compiler, metaclass=abc.ABCMeta):
     def get_argument_syntax(self) -> str:
         return 'msvc'
 
+    def symbols_have_underscore_prefix(self, env: 'Environment') -> bool:
+        '''
+        Check if the compiler prefixes an underscore to global C symbols.
+
+        This overrides the Clike method, as for MSVC checking the
+        underscore prefix based on the compiler define never works,
+        so do not even try.
+        '''
+        # Try to consult a hardcoded list of cases we know
+        # absolutely have an underscore prefix
+        result = self._symbols_have_underscore_prefix_list(env)
+        if result is not None:
+            return result
+
+        # As a last resort, try search in a compiled binary
+        return self._symbols_have_underscore_prefix_searchbin(env)
+
 
 class MSVCCompiler(VisualStudioLikeCompiler):
 
-    """Spcific to the Microsoft Compilers."""
+    """Specific to the Microsoft Compilers."""
 
-    def __init__(self, target: str):
-        super().__init__(target)
-        self.id = 'msvc'
+    id = 'msvc'
 
     def get_compile_debugfile_args(self, rel_obj: str, pch: bool = False) -> T.List[str]:
         args = super().get_compile_debugfile_args(rel_obj, pch)
@@ -415,18 +433,19 @@ class MSVCCompiler(VisualStudioLikeCompiler):
 
 class ClangClCompiler(VisualStudioLikeCompiler):
 
-    """Spcific to Clang-CL."""
+    """Specific to Clang-CL."""
+
+    id = 'clang-cl'
 
     def __init__(self, target: str):
         super().__init__(target)
-        self.id = 'clang-cl'
 
         # Assembly
         self.can_compile_suffixes.add('s')
 
     def has_arguments(self, args: T.List[str], env: 'Environment', code: str, mode: str) -> T.Tuple[bool, bool]:
         if mode != 'link':
-            args = args + ['-Werror=unknown-argument']
+            args = args + ['-Werror=unknown-argument', '-Werror=unknown-warning-option']
         return super().has_arguments(args, env, code, mode)
 
     def get_toolset_version(self) -> T.Optional[str]:
@@ -435,3 +454,20 @@ class ClangClCompiler(VisualStudioLikeCompiler):
 
     def get_pch_base_name(self, header: str) -> str:
         return header
+
+    def get_include_args(self, path: str, is_system: bool) -> T.List[str]:
+        if path == '':
+            path = '.'
+        return ['/clang:-isystem' + path] if is_system else ['-I' + path]
+
+    def get_dependency_compile_args(self, dep: 'Dependency') -> T.List[str]:
+        if dep.get_include_type() == 'system':
+            converted = []
+            for i in dep.get_compile_args():
+                if i.startswith('-isystem'):
+                    converted += ['/clang:' + i]
+                else:
+                    converted += [i]
+            return converted
+        else:
+            return dep.get_compile_args()

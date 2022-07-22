@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 # Work around some pathlib bugs...
 from mesonbuild import _pathlib
@@ -48,10 +49,9 @@ from mesonbuild import mlog
 from mesonbuild import mtest
 from mesonbuild.compilers import compiler_from_language, detect_objc_compiler, detect_objcpp_compiler
 from mesonbuild.build import ConfigurationData
-from mesonbuild.mesonlib import MachineChoice, Popen_safe, TemporaryDirectoryWinProof
+from mesonbuild.mesonlib import MachineChoice, Popen_safe, TemporaryDirectoryWinProof, setup_vsenv
 from mesonbuild.mlog import blue, bold, cyan, green, red, yellow, normal_green
 from mesonbuild.coredata import backendlist, version as meson_version
-from mesonbuild.mesonmain import setup_vsenv
 from mesonbuild.modules.python import PythonExternalProgram
 from run_tests import get_fake_options, run_configure, get_meson_script
 from run_tests import get_backend_commands, get_backend_args_for_dir, Backend
@@ -85,7 +85,7 @@ if T.TYPE_CHECKING:
 ALL_TESTS = ['cmake', 'common', 'native', 'warning-meson', 'failing-meson', 'failing-build', 'failing-test',
              'keyval', 'platform-osx', 'platform-windows', 'platform-linux',
              'java', 'C#', 'vala', 'cython', 'rust', 'd', 'objective c', 'objective c++',
-             'fortran', 'swift', 'cuda', 'python3', 'python', 'fpga', 'frameworks', 'nasm', 'wasm',
+             'fortran', 'swift', 'cuda', 'python3', 'python', 'fpga', 'frameworks', 'nasm', 'wasm', 'wayland'
              ]
 
 
@@ -283,7 +283,8 @@ class TestDef:
 failing_logs: T.List[str] = []
 print_debug = 'MESON_PRINT_TEST_OUTPUT' in os.environ
 under_ci = 'CI' in os.environ
-ci_jobname = os.environ.get('MESON_CI_JOBNAME', None)
+raw_ci_jobname = os.environ.get('MESON_CI_JOBNAME', None)
+ci_jobname = raw_ci_jobname if raw_ci_jobname != 'thirdparty' else None
 do_debug = under_ci or print_debug
 no_meson_log_msg = 'No meson-log.txt found.'
 
@@ -314,7 +315,7 @@ class StopException(Exception):
     def __init__(self) -> None:
         super().__init__('Stopped by user')
 
-def stop_handler(signal: signal.Signals, frame: T.Optional['FrameType']) -> None:
+def stop_handler(signal: int, frame: T.Optional['FrameType']) -> None:
     global stop
     stop = True
 signal.signal(signal.SIGINT, stop_handler)
@@ -518,7 +519,7 @@ def _compare_output(expected: T.List[T.Dict[str, str]], output: str, desc: str) 
 def validate_output(test: TestDef, stdo: str, stde: str) -> str:
     return _compare_output(test.stdout, stdo, 'stdout')
 
-# There are some class variables and such that cahce
+# There are some class variables and such that cache
 # information. Clear all of these. The better solution
 # would be to change the code so that no state is persisted
 # but that would be a lot of work given that Meson was originally
@@ -614,7 +615,7 @@ def run_test(test: TestDef,
     global is_worker_process
     is_worker_process = True
     # Setup the test environment
-    assert not test.skip, 'Skipped thest should not be run'
+    assert not test.skip, 'Skipped test should not be run'
     build_dir = create_deterministic_builddir(test, use_tmp)
     try:
         with TemporaryDirectoryWinProof(prefix='i ', dir=None if use_tmp else os.getcwd()) as install_dir:
@@ -650,7 +651,8 @@ def _run_test(test: TestDef,
     (returncode, stdo, stde) = run_configure(gen_args, env=test.env, catch_exception=True)
     try:
         logfile = Path(test_build_dir, 'meson-logs', 'meson-log.txt')
-        mesonlog = logfile.open(errors='ignore', encoding='utf-8').read()
+        with logfile.open(errors='ignore', encoding='utf-8') as fid:
+            mesonlog = fid.read()
     except Exception:
         mesonlog = no_meson_log_msg
     cicmds = run_ci_commands(mesonlog)
@@ -927,8 +929,7 @@ def have_d_compiler() -> bool:
         # that exists but segfaults every time the compiler is run.
         # Don't know why. Don't know how to fix. Skip in this case.
         cp = subprocess.run(['dmd', '--version'],
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE)
+                            capture_output=True)
         if cp.stdout == b'':
             return False
         return True
@@ -973,7 +974,7 @@ def have_java() -> bool:
 
 def skip_dont_care(t: TestDef) -> bool:
     # Everything is optional when not running on CI
-    if not under_ci:
+    if ci_jobname is None:
         return True
 
     # Non-frameworks test are allowed to determine their own skipping under CI (currently)
@@ -1034,6 +1035,13 @@ def should_skip_rust(backend: Backend) -> bool:
             return True
     return False
 
+def should_skip_wayland() -> bool:
+    if mesonlib.is_windows() or mesonlib.is_osx():
+        return True
+    if not shutil.which('wayland-scanner'):
+        return True
+    return False
+
 def detect_tests_to_run(only: T.Dict[str, T.List[str]], use_tmp: bool) -> T.List[T.Tuple[str, T.List[TestDef], bool]]:
     """
     Parameters
@@ -1054,6 +1062,10 @@ def detect_tests_to_run(only: T.Dict[str, T.List[str]], use_tmp: bool) -> T.List
                        shutil.which('nagfor') or
                        shutil.which('ifort'))
 
+    skip_cmake = ((os.environ.get('compiler') == 'msvc2015' and under_ci) or
+                  'cmake' not in tool_vers_map or
+                  not mesonlib.version_compare(tool_vers_map['cmake'], '>=3.14'))
+
     class TestCategory:
         def __init__(self, category: str, subdir: str, skip: bool = False, stdout_mandatory: bool = False):
             self.category = category                  # category name
@@ -1062,7 +1074,7 @@ def detect_tests_to_run(only: T.Dict[str, T.List[str]], use_tmp: bool) -> T.List
             self.stdout_mandatory = stdout_mandatory  # expected stdout is mandatory for tests in this category
 
     all_tests = [
-        TestCategory('cmake', 'cmake', not shutil.which('cmake') or (os.environ.get('compiler') == 'msvc2015' and under_ci)),
+        TestCategory('cmake', 'cmake', skip_cmake),
         TestCategory('common', 'common'),
         TestCategory('native', 'native'),
         TestCategory('warning-meson', 'warning', stdout_mandatory=True),
@@ -1091,6 +1103,7 @@ def detect_tests_to_run(only: T.Dict[str, T.List[str]], use_tmp: bool) -> T.List
         TestCategory('frameworks', 'frameworks'),
         TestCategory('nasm', 'nasm'),
         TestCategory('wasm', 'wasm', shutil.which('emcc') is None or backend is not Backend.ninja),
+        TestCategory('wayland', 'wayland', should_skip_wayland()),
     ]
 
     categories = [t.category for t in all_tests]
@@ -1166,6 +1179,12 @@ class LogRunFuture:
 
 RunFutureUnion = T.Union[TestRunFuture, LogRunFuture]
 
+def test_emits_skip_msg(line: str) -> bool:
+    for prefix in {'Problem encountered', 'Assert failed', 'Failed to configure the CMake subproject'}:
+        if f'{prefix}: MESON_SKIP_TEST' in line:
+            return True
+    return False
+
 def _run_tests(all_tests: T.List[T.Tuple[str, T.List[TestDef], bool]],
                log_name_base: str,
                failfast: bool,
@@ -1186,7 +1205,7 @@ def _run_tests(all_tests: T.List[T.Tuple[str, T.List[TestDef], bool]],
     print(f'\nRunning tests with {num_workers} workers')
 
     # Pack the global state
-    state = (compile_commands, clean_commands, test_commands, install_commands, uninstall_commands, backend, backend_flags, host_c_compiler)
+    state = GlobalState(compile_commands, clean_commands, test_commands, install_commands, uninstall_commands, backend, backend_flags, host_c_compiler)
     executor = ProcessPoolExecutor(max_workers=num_workers)
 
     futures: T.List[RunFutureUnion] = []
@@ -1223,19 +1242,21 @@ def _run_tests(all_tests: T.List[T.Tuple[str, T.List[TestDef], bool]],
     # Ensure we only cancel once
     tests_canceled = False
 
-    # Optionally enable the tqdm progress bar
+    # Optionally enable the tqdm progress bar, but only if there is at least
+    # one LogRunFuture and one TestRunFuture
     global safe_print
     futures_iter: T.Iterable[RunFutureUnion] = futures
-    try:
-        from tqdm import tqdm
-        futures_iter = tqdm(futures, desc='Running tests', unit='test')
+    if len(futures) > 2 and sys.stdout.isatty():
+        try:
+            from tqdm import tqdm
+            futures_iter = tqdm(futures, desc='Running tests', unit='test')
 
-        def tqdm_print(*args: mlog.TV_Loggable, sep: str = ' ') -> None:
-            tqdm.write(sep.join([str(x) for x in args]))
+            def tqdm_print(*args: mlog.TV_Loggable, sep: str = ' ') -> None:
+                tqdm.write(sep.join([str(x) for x in args]))
 
-        safe_print = tqdm_print
-    except ImportError:
-        pass
+            safe_print = tqdm_print
+        except ImportError:
+            pass
 
     # Wait and handle the test results and print the stored log output
     for f in futures_iter:
@@ -1245,7 +1266,7 @@ def _run_tests(all_tests: T.List[T.Tuple[str, T.List[TestDef], bool]],
             f.log()
             continue
 
-        # Acutal Test run
+        # Actual Test run
         testname = f.name
         t        = f.testdef
         try:
@@ -1254,11 +1275,11 @@ def _run_tests(all_tests: T.List[T.Tuple[str, T.List[TestDef], bool]],
             f.status = TestStatus.CANCELED
 
         if stop and not tests_canceled:
-            num_running = sum([1 if f2.status is TestStatus.RUNNING  else 0 for f2 in futures])
+            num_running = sum(1 if f2.status is TestStatus.RUNNING  else 0 for f2 in futures)
             for f2 in futures:
                 f2.cancel()
             executor.shutdown()
-            num_canceled = sum([1 if f2.status is TestStatus.CANCELED else 0 for f2 in futures])
+            num_canceled = sum(1 if f2.status is TestStatus.CANCELED else 0 for f2 in futures)
             safe_print(f'\nCanceled {num_canceled} out of {num_running} running tests.')
             safe_print(f'Finishing the remaining {num_running - num_canceled} tests.\n')
             tests_canceled = True
@@ -1272,10 +1293,19 @@ def _run_tests(all_tests: T.List[T.Tuple[str, T.List[TestDef], bool]],
         if result is None:
             # skipped due to skipped category skip or 'tools:' or 'skip_on_env:'
             is_skipped = True
+            skip_reason = 'not run because preconditions were not met'
             skip_as_expected = True
         else:
             # skipped due to test outputting 'MESON_SKIP_TEST'
-            is_skipped = 'MESON_SKIP_TEST' in result.stdo
+            for l in result.stdo.splitlines():
+                if test_emits_skip_msg(l):
+                    is_skipped = True
+                    offset = l.index('MESON_SKIP_TEST') + 16
+                    skip_reason = l[offset:].strip()
+                    break
+            else:
+                is_skipped = False
+                skip_reason = ''
             if not skip_dont_care(t):
                 skip_as_expected = (is_skipped == t.skip_expected)
             else:
@@ -1286,6 +1316,7 @@ def _run_tests(all_tests: T.List[T.Tuple[str, T.List[TestDef], bool]],
 
         if is_skipped and skip_as_expected:
             f.update_log(TestStatus.SKIP)
+            safe_print(bold('Reason:'), skip_reason)
             current_test = ET.SubElement(current_suite, 'testcase', {'name': testname, 'classname': t.category})
             ET.SubElement(current_test, 'skipped', {})
             continue
@@ -1298,7 +1329,7 @@ def _run_tests(all_tests: T.List[T.Tuple[str, T.List[TestDef], bool]],
             else:
                 skip_msg = 'Test ran, but was expected to be skipped'
                 status = TestStatus.UNEXRUN
-            result.msg = "%s for MESON_CI_JOBNAME '%s'" % (skip_msg, ci_jobname)
+            result.msg = f"{skip_msg} for MESON_CI_JOBNAME '{ci_jobname}'"
 
             f.update_log(status)
             current_test = ET.SubElement(current_suite, 'testcase', {'name': testname, 'classname': t.category})
@@ -1311,7 +1342,7 @@ def _run_tests(all_tests: T.List[T.Tuple[str, T.List[TestDef], bool]],
             safe_print(bold('During:'), result.step.name)
             safe_print(bold('Reason:'), result.msg)
             failing_tests += 1
-            # Append a visual seperator for the different test cases
+            # Append a visual separator for the different test cases
             cols = shutil.get_terminal_size((100, 20)).columns
             name_str = ' '.join([str(x) for x in f.testdef.display_name()])
             name_len = len(re.sub(r'\x1B[^m]+m', '', name_str))  # Do not count escape sequences
@@ -1480,7 +1511,7 @@ def print_tool_versions() -> None:
         args = [t.tool] + t.args
         pc, o, e = Popen_safe(args)
         if pc.returncode != 0:
-            return '{} (invalid {} executable)'.format(exe, t.tool)
+            return f'{exe} (invalid {t.tool} executable)'
         for i in o.split('\n'):
             i = i.strip('\n\r\t ')
             m = t.regex.match(i)
@@ -1508,8 +1539,8 @@ def clear_transitive_files() -> None:
             mesonlib.windows_proof_rm(str(d))
 
 if __name__ == '__main__':
-    if under_ci and not ci_jobname:
-        raise SystemExit('Running under CI but MESON_CI_JOBNAME is not set')
+    if under_ci and not raw_ci_jobname:
+        raise SystemExit('Running under CI but $MESON_CI_JOBNAME is not set (set to "thirdparty" if you are running outside of the github org)')
 
     setup_vsenv()
 
@@ -1517,9 +1548,14 @@ if __name__ == '__main__':
         # This fails in some CI environments for unknown reasons.
         num_workers = multiprocessing.cpu_count()
     except Exception as e:
-        print('Could not determine number of CPUs due to the following reason:' + str(e))
+        print('Could not determine number of CPUs due to the following reason:', str(e))
         print('Defaulting to using only two processes')
         num_workers = 2
+
+    if num_workers > 64:
+        # Too much parallelism seems to trigger a potential Python bug:
+        # https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1004107
+        num_workers = 64
 
     parser = argparse.ArgumentParser(description="Run the test suite of Meson.")
     parser.add_argument('extra_args', nargs='*',

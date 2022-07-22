@@ -159,7 +159,7 @@ joined = 'C:\\foo\\bar' / 'builddir'     # => C:/foo/bar/builddir
 joined = 'C:\\foo\\bar' / 'D:\\builddir' # => D:/builddir
 ```
 
-Note that this is equivalent to using [`join_paths()`](Reference-manual.md#join_paths),
+Note that this is equivalent to using [[join_paths]],
 which was obsoleted by this operator.
 
 ### Strings running over multiple lines
@@ -176,7 +176,21 @@ int main (int argc, char ** argv) {
 
 These are raw strings that do not support the escape sequences listed
 above.  These strings can also be combined with the string formatting
-functionality described below.
+functionality via `.format()` described below.
+
+Note that multiline f-string support was added in version 0.63.
+
+### String index
+
+Strings support the indexing (`[<num>]`) operator. This operator allows (read
+only) accessing a specific character. The returned value is guaranteed to be
+a string of length 1.
+
+```meson
+foo = 'abcd'
+message(foo[1])  # Will print 'b'
+foo[2] = 'C'     # ERROR: Meson objects are immutable!
+```
 
 ### String formatting
 
@@ -197,7 +211,8 @@ As can be seen, the formatting works by replacing placeholders of type
 *(Added 0.58)*
 
 Format strings can be used as a non-positional alternative to the
-string formatting functionality described above.
+string formatting functionality described above. Note that multiline f-string
+support was added in version 0.63.
 
 ```meson
 n = 10
@@ -241,7 +256,15 @@ s = s.replace('as', 'are')
 define = ' -Dsomedefine '
 stripped_define = define.strip()
 # 'stripped_define' now has the value '-Dsomedefine'
+
+# You may also pass a string to strip, which specifies the set of characters to
+# be removed.
+string = 'xyxHelloxyx'.strip('xy')
+# 'string' now has the value 'Hello'
 ```
+
+Since 0.43.0, you can specify one positional string argument,
+and all characters in that string will be stripped.
 
 #### .to_upper(), .to_lower()
 
@@ -435,7 +458,7 @@ Dictionaries are immutable and do not have a guaranteed order.
 
 Dictionaries are available since 0.47.0.
 
-Visit the [Reference Manual](Reference-manual.md#dictionary-object) to read
+Visit the [[@dict]] objects page in the Reference Manual to read
 about the methods exposed by dictionaries.
 
 Since 0.49.0, you can check if a dictionary contains a key like this:
@@ -493,7 +516,7 @@ executable('progname',
   kwargs: d)
 ```
 
-A single function can take keyword argumets both directly in the
+A single function can take keyword arguments both directly in the
 function call and indirectly via the `kwargs` keyword argument. The
 only limitation is that it is a hard error to pass any particular key
 both as a direct and indirect argument.
@@ -506,6 +529,54 @@ executable('progname', 'prog.c',
 ```
 
 Attempting to do this causes Meson to immediately exit with an error.
+
+### Argument flattening
+
+Argument flattening is a Meson feature that aims to simplify using
+methods and functions. For functions where this feature is active,
+Meson takes the list of arguments and flattens all nested lists into
+one big list.
+
+For instance the following function calls to [[executable]] are
+identical in Meson:
+
+```meson
+# A normal example:
+executable('exe1', ['foo.c', 'bar.c', 'foobar.c'])
+
+# A more contrived example that also works but certainly
+# isn't good Meson code:
+l1 = ['bar.c']
+executable('exe1', [[['foo.c', l1]], ['foobar.c']])
+
+# How meson will treat all the previous calls internally:
+executable('exe1', 'foo.c', 'bar.c', 'foobar.c')
+```
+
+Because of an internal implementation detail, the following syntax
+is currently also supported, even though the first argument of
+[[executable]] is a single [[@str]] and not a [[@list]]:
+
+```meson
+# WARNING: This example is only valid because of an internal
+#          implementation detail and not because it is intended
+#
+#          PLEASE DO NOT DO SOMETHING LIKE THIS!
+#
+executable(['exe1', 'foo.c'], 'bar.c', 'foobar.c')
+```
+
+This code is currently accepted because argument flattening *currently*
+happens before the parameters are evaluated. "Support" for
+such constructs will likely be removed in future Meson releases!
+
+Argument flattening is supported by *most* but not *all* Meson
+functions and methods. As a general rule, it can be assumed that a
+function or method supports argument flattening if the exact list
+structure is irrelevant to a function.
+
+Whether a function supports argument flattening is documented in the
+[Reference Manual](Reference-manual.md).
 
 ## Method calls
 

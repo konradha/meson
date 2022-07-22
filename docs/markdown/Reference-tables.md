@@ -5,37 +5,38 @@
 These are return values of the `get_id` (Compiler family) and
 `get_argument_syntax` (Argument syntax) method in a compiler object.
 
-| Value      | Compiler family                             | Argument syntax |
-|------------|---------------------------------------------|-----------------|
-| arm        | ARM compiler                                |                 |
-| armclang   | ARMCLANG compiler                           |                 |
-| c2000      | Texas Instruments C2000 compiler            |                 |
-| ccomp      | The CompCert formally-verified C compiler   |                 |
-| ccrx       | Renesas RX Family C/C++ compiler            |                 |
-| clang      | The Clang compiler                          | gcc             |
-| clang-cl   | The Clang compiler (MSVC compatible driver) | msvc            |
-| dmd        | D lang reference compiler                   |                 |
-| emscripten | Emscripten WASM compiler                    |                 |
-| flang      | Flang Fortran compiler                      |                 |
-| lfortran   | LFortran Fortran compiler                   |                 |
-| g95        | The G95 Fortran compiler                    |                 |
-| gcc        | The GNU Compiler Collection                 | gcc             |
-| intel      | Intel compiler (Linux and Mac)              | gcc             |
-| intel-cl   | Intel compiler (Windows)                    | msvc            |
-| lcc        | Elbrus C/C++/Fortran Compiler               |                 |
-| llvm       | LLVM-based compiler (Swift, D)              |                 |
-| mono       | Xamarin C# compiler                         |                 |
-| msvc       | Microsoft Visual Studio                     | msvc            |
-| nagfor     | The NAG Fortran compiler                    |                 |
-| nvidia_hpc | NVidia HPC SDK compilers                    |                 |
-| open64     | The Open64 Fortran Compiler                 |                 |
-| pathscale  | The Pathscale Fortran compiler              |                 |
-| pgi        | Portland PGI C/C++/Fortran compilers        |                 |
-| rustc      | Rust compiler                               |                 |
-| sun        | Sun Fortran compiler                        |                 |
-| valac      | Vala compiler                               |                 |
-| xc16       | Microchip XC16 C compiler                   |                 |
-| cython     | The Cython compiler                         |                 |
+| Value     | Compiler family                  | Argument syntax |
+| -----     | ---------------                  | --------------- |
+| arm       | ARM compiler                     |                 |
+| armclang  | ARMCLANG compiler                |                 |
+| ccomp     | The CompCert formally-verified C compiler |        |
+| ccrx      | Renesas RX Family C/C++ compiler |                 |
+| clang     | The Clang compiler               | gcc             |
+| clang-cl  | The Clang compiler (MSVC compatible driver) | msvc |
+| dmd       | D lang reference compiler        |                 |
+| emscripten| Emscripten WASM compiler         |                 |
+| flang     | Flang Fortran compiler           |                 |
+| lfortran  | LFortran Fortran compiler        |                 |
+| g95       | The G95 Fortran compiler         |                 |
+| gcc       | The GNU Compiler Collection      | gcc             |
+| intel     | Intel compiler (Linux and Mac)   | gcc             |
+| intel-cl  | Intel compiler (Windows)         | msvc            |
+| lcc       | Elbrus C/C++/Fortran Compiler    |                 |
+| llvm      | LLVM-based compiler (Swift, D)   |                 |
+| mono      | Xamarin C# compiler              |                 |
+| msvc      | Microsoft Visual Studio          | msvc            |
+| nagfor    | The NAG Fortran compiler         |                 |
+| nvidia_hpc| NVidia HPC SDK compilers         |                 |
+| open64    | The Open64 Fortran Compiler      |                 |
+| pathscale | The Pathscale Fortran compiler   |                 |
+| pgi       | Portland PGI C/C++/Fortran compilers |             |
+| rustc     | Rust compiler                    |                 |
+| sun       | Sun Fortran compiler             |                 |
+| c2000     | Texas Instruments C/C++ Compiler (C2000) |                 |
+| ti        | Texas Instruments C/C++ Compiler |                 |
+| valac     | Vala compiler                    |                 |
+| xc16      | Microchip XC16 C compiler        |                 |
+| cython    | The Cython compiler              |                 |
 
 ## Linker ids
 
@@ -46,6 +47,7 @@ These are return values of the `get_linker_id` method in a compiler object.
 | ld.bfd     | The GNU linker                              |
 | ld.gold    | The GNU gold linker                         |
 | ld.lld     | The LLVM linker, with the GNU interface     |
+| ld.mold    | The fast MOLD linker                        |
 | ld.solaris | Solaris and illumos                         |
 | ld.wasm    | emscripten's wasm-ld linker                 |
 | ld64       | Apple ld64                                  |
@@ -56,6 +58,7 @@ These are return values of the `get_linker_id` method in a compiler object.
 | rlink      | The Renesas linker, used with CCrx only     |
 | xc16-ar    | The Microchip linker, used with XC16 only   |
 | ar2000     | The Texas Instruments linker, used with C2000 only |
+| ti-ar      | The Texas Instruments linker |
 | armlink    | The ARM linker (arm and armclang compilers) |
 | pgi        | Portland/Nvidia PGI                         |
 | nvlink     | Nvidia Linker used with cuda                |
@@ -91,12 +94,14 @@ set in the cross file.
 | csky                | 32 bit CSky processor    |
 | dspic               | 16 bit Microchip dsPIC   |
 | e2k                 | MCST Elbrus processor    |
+| ft32                | 32 bit Bridgetek MCU     |
 | ia64                | Itanium processor        |
 | loongarch64         | 64 bit Loongson processor|
 | m68k                | Motorola 68000 processor |
 | microblaze          | MicroBlaze processor     |
 | mips                | 32 bit MIPS processor    |
 | mips64              | 64 bit MIPS processor    |
+| msp430              | 16 bit MSP430 processor  |
 | parisc              | HP PA-RISC processor     |
 | pic24               | 16 bit Microchip PIC24   |
 | ppc                 | 32 bit PPC processors    |
@@ -193,7 +198,7 @@ arguments](#language-arguments-parameter-names) instead.
 | LDFLAGS     | The linker flags, used for all languages |
 
 N.B. these settings are specified per machine, and so the environment
-varibles actually come in pairs. See the [environment variables per
+variables actually come in pairs. See the [environment variables per
 machine](#Environment-variables-per-machine) section for details.
 
 ## Function Attributes
@@ -240,7 +245,10 @@ which are supported by GCC, Clang, and other compilers.
 | optimize                 |
 | packed                   |
 | pure                     |
+| retain⁴                  |
 | returns_nonnull          |
+| section⁵                 |
+| sentinel⁵                |
 | unused                   |
 | used                     |
 | visibility*              |
@@ -251,7 +259,7 @@ which are supported by GCC, Clang, and other compilers.
 | warning                  |
 | warn_unused_result       |
 | weak                     |
-| weakreaf                 |
+| weakref                  |
 
 \* *Changed in 0.52.0* the "visibility" target no longer includes
 "protected", which is not present in Apple's clang.
@@ -260,6 +268,10 @@ which are supported by GCC, Clang, and other compilers.
 "visibility" as they provide narrower checks.
 
 ³ *New in 0.55.0*
+
+⁴ *New in 0.62.0*
+
+⁵ *New in 0.63.0*
 
 ### MSVC __declspec
 
@@ -290,7 +302,7 @@ These are the values that can be passed to `dependency` function's
 ## Compiler and Linker selection variables
 
 N.B. these settings are specified per machine, and so the environment
-varibles actually come in pairs. See the [environment variables per
+variables actually come in pairs. See the [environment variables per
 machine](#Environment-variables-per-machine) section for details.
 
 | Language      | Compiler | Linker    | Note                                        |

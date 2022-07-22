@@ -20,10 +20,18 @@ from ..mesonlib import HoldableObject, MesonBugException
 import textwrap
 
 import typing as T
+from abc import ABCMeta
 
 if T.TYPE_CHECKING:
+    from typing_extensions import Protocol
+
     # Object holders need the actual interpreter
     from ..interpreter import Interpreter
+
+    __T = T.TypeVar('__T', bound='TYPE_var', contravariant=True)
+
+    class OperatorCall(Protocol[__T]):
+        def __call__(self, other: __T) -> 'TYPE_var': ...
 
 TV_fw_var = T.Union[str, int, bool, list, dict, 'InterpreterObject']
 TV_fw_args = T.List[T.Union[mparser.BaseNode, TV_fw_var]]
@@ -38,14 +46,10 @@ TYPE_kwargs = T.Dict[str, TYPE_var]
 TYPE_nkwargs = T.Dict[str, TYPE_nvar]
 TYPE_key_resolver = T.Callable[[mparser.BaseNode], str]
 
-if T.TYPE_CHECKING:
-    from typing_extensions import Protocol
-    __T = T.TypeVar('__T', bound=TYPE_var, contravariant=True)
-    class OperatorCall(Protocol[__T]):
-        def __call__(self, other: __T) -> TYPE_var: ...
+SubProject = T.NewType('SubProject', str)
 
 class InterpreterObject:
-    def __init__(self, *, subproject: T.Optional[str] = None) -> None:
+    def __init__(self, *, subproject: T.Optional['SubProject'] = None) -> None:
         self.methods: T.Dict[
             str,
             T.Callable[[T.List[TYPE_var], TYPE_kwargs], TYPE_var]
@@ -54,14 +58,14 @@ class InterpreterObject:
         self.trivial_operators: T.Dict[
             MesonOperator,
             T.Tuple[
-                T.Type[T.Union[TYPE_var, T.Tuple[TYPE_var, ...]]],
+                T.Union[T.Type, T.Tuple[T.Type, ...]],
                 'OperatorCall'
             ]
         ] = {}
         # Current node set during a method call. This can be used as location
         # when printing a warning message during a method call.
         self.current_node:  mparser.BaseNode = None
-        self.subproject: str = subproject or ''
+        self.subproject = subproject or SubProject('')
 
         # Some default operators supported by all objects
         self.operators.update({
@@ -94,12 +98,11 @@ class InterpreterObject:
             if op[0] is None and other is not None:
                 raise MesonBugException(f'The unary operator `{operator.value}` of {self.display_name()} was passed the object {other} of type {type(other).__name__}')
             if op[0] is not None and not isinstance(other, op[0]):
-                raise InvalidArguments(f'The `{operator.value}` of {self.display_name()} does not accept objects of type {type(other).__name__} ({other})')
+                raise InvalidArguments(f'The `{operator.value}` operator of {self.display_name()} does not accept objects of type {type(other).__name__} ({other})')
             return op[1](other)
         if operator in self.operators:
             return self.operators[operator](other)
         raise InvalidCode(f'Object {self} of type {self.display_name()} does not support the `{operator.value}` operator.')
-
 
     # Default comparison operator support
     def _throw_comp_exception(self, other: TYPE_var, opt_type: str) -> T.NoReturn:
@@ -129,8 +132,8 @@ class MesonInterpreterObject(InterpreterObject):
 class MutableInterpreterObject:
     ''' Dummy class to mark the object type as mutable '''
 
-HoldableTypes = (HoldableObject, int, bool)
-TYPE_HoldableTypes = T.Union[HoldableObject, int, bool]
+HoldableTypes = (HoldableObject, int, bool, str, list, dict)
+TYPE_HoldableTypes = T.Union[TYPE_elementary, HoldableObject]
 InterpreterObjectTypeVar = T.TypeVar('InterpreterObjectTypeVar', bound=TYPE_HoldableTypes)
 
 class ObjectHolder(InterpreterObject, T.Generic[InterpreterObjectTypeVar]):
@@ -145,7 +148,7 @@ class ObjectHolder(InterpreterObject, T.Generic[InterpreterObjectTypeVar]):
         self.interpreter = interpreter
         self.env = self.interpreter.environment
 
-    # Hide the object holder abstrction from the user
+    # Hide the object holder abstraction from the user
     def display_name(self) -> str:
         return type(self.held_object).__name__
 
@@ -164,16 +167,15 @@ class ObjectHolder(InterpreterObject, T.Generic[InterpreterObjectTypeVar]):
     def __repr__(self) -> str:
         return f'<[{type(self).__name__}] holds [{type(self.held_object).__name__}]: {self.held_object!r}>'
 
-class RangeHolder(MesonInterpreterObject):
-    def __init__(self, start: int, stop: int, step: int, *, subproject: str) -> None:
-        super().__init__(subproject=subproject)
-        self.range = range(start, stop, step)
+class IterableObject(metaclass=ABCMeta):
+    '''Base class for all objects that can be iterated over in a foreach loop'''
 
-    def __iter__(self) -> T.Iterator[int]:
-        return iter(self.range)
+    def iter_tuple_size(self) -> T.Optional[int]:
+        '''Return the size of the tuple for each iteration. Returns None if only a single value is returned.'''
+        raise MesonBugException(f'iter_tuple_size not implemented for {self.__class__.__name__}')
 
-    def __getitem__(self, key: int) -> int:
-        return self.range[key]
+    def iter_self(self) -> T.Iterator[T.Union[TYPE_var, T.Tuple[TYPE_var, ...]]]:
+        raise MesonBugException(f'iter not implemented for {self.__class__.__name__}')
 
-    def __len__(self) -> int:
-        return len(self.range)
+    def size(self) -> int:
+        raise MesonBugException(f'size not implemented for {self.__class__.__name__}')

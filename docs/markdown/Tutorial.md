@@ -129,7 +129,7 @@ static void activate(GtkApplication* app, gpointer user_data)
   label = gtk_label_new("Hello GNOME!");
   gtk_container_add (GTK_CONTAINER (window), label);
   gtk_window_set_title(GTK_WINDOW (window), "Welcome to GNOME");
-  gtk_window_set_default_size(GTK_WINDOW (window), 200, 100);
+  gtk_window_set_default_size(GTK_WINDOW (window), 400, 200);
   gtk_widget_show_all(window);
 } // end of function activate
 
@@ -160,7 +160,7 @@ executable('demo', 'main.c', dependencies : gtkdep)
 ```
 
 If your app needs to use multiple libraries, you need to use separate
-[`dependency()`](Reference-manual.md#dependency) calls for each, like so:
+[[dependency]] calls for each, like so:
 
 ```meson
 gtkdeps = [dependency('gtk+-3.0'), dependency('gtksourceview-3.0')]

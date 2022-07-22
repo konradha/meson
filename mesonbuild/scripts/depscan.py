@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
 
 import json
 import os
@@ -20,8 +21,11 @@ import re
 import sys
 import typing as T
 
-from ..backend.ninjabackend import TargetDependencyScannerInfo, ninja_quote
+from ..backend.ninjabackend import ninja_quote
 from ..compilers.compilers import lang_suffixes
+
+if T.TYPE_CHECKING:
+    from ..backend.ninjabackend import TargetDependencyScannerInfo
 
 CPP_IMPORT_RE = re.compile(r'\w*import ([a-zA-Z0-9]+);')
 CPP_EXPORT_RE = re.compile(r'\w*export module ([a-zA-Z0-9]+);')
@@ -38,13 +42,13 @@ FORTRAN_USE_RE = re.compile(FORTRAN_USE_PAT, re.IGNORECASE)
 class DependencyScanner:
     def __init__(self, pickle_file: str, outfile: str, sources: T.List[str]):
         with open(pickle_file, 'rb') as pf:
-            self.target_data = pickle.load(pf) # type: TargetDependencyScannerInfo
+            self.target_data: TargetDependencyScannerInfo = pickle.load(pf)
         self.outfile = outfile
         self.sources = sources
-        self.provided_by = {} # type: T.Dict[str, str]
-        self.exports = {} # type: T.Dict[str, str]
-        self.needs = {} # type: T.Dict[str, T.List[str]]
-        self.sources_with_exports = [] # type: T.List[str]
+        self.provided_by: T.Dict[str, str] = {}
+        self.exports: T.Dict[str, str] = {}
+        self.needs: T.Dict[str, T.List[str]] = {}
+        self.sources_with_exports: T.List[str] = []
 
     def scan_file(self, fname: str) -> None:
         suffix = os.path.splitext(fname)[1][1:].lower()
@@ -58,7 +62,7 @@ class DependencyScanner:
     def scan_fortran_file(self, fname: str) -> None:
         fpath = pathlib.Path(fname)
         modules_in_this_file = set()
-        for line in fpath.read_text(encoding='utf-8').split('\n'):
+        for line in fpath.read_text(encoding='utf-8', errors='ignore').split('\n'):
             import_match = FORTRAN_USE_RE.match(line)
             export_match = FORTRAN_MODULE_RE.match(line)
             submodule_export_match = FORTRAN_SUBMOD_RE.match(line)
@@ -106,10 +110,9 @@ class DependencyScanner:
                 else:
                     self.needs[fname] = [parent_module_name_full]
 
-
     def scan_cpp_file(self, fname: str) -> None:
         fpath = pathlib.Path(fname)
-        for line in fpath.read_text(encoding='utf-8').split('\n'):
+        for line in fpath.read_text(encoding='utf-8', errors='ignore').split('\n'):
             import_match = CPP_IMPORT_RE.match(line)
             export_match = CPP_EXPORT_RE.match(line)
             if import_match:
@@ -185,7 +188,7 @@ class DependencyScanner:
                 else:
                     mod_gen = ''
                 if quoted_module_files_needed:
-                    mod_dep = '| '  + ' '.join(quoted_module_files_needed)
+                    mod_dep = '| ' + ' '.join(quoted_module_files_needed)
                 else:
                     mod_dep = ''
                 build_line = 'build {} {}: dyndep {}'.format(quoted_objfilename,
@@ -197,7 +200,7 @@ class DependencyScanner:
 def run(args: T.List[str]) -> int:
     assert len(args) == 3, 'got wrong number of arguments!'
     pickle_file, outfile, jsonfile = args
-    with open(jsonfile, 'r', encoding='utf-8') as f:
+    with open(jsonfile, encoding='utf-8') as f:
         sources = json.load(f)
     scanner = DependencyScanner(pickle_file, outfile, sources)
     return scanner.scan()
